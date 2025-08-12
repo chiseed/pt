@@ -1,15 +1,9 @@
-# server.py
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import sqlite3
-import datetime
-import json
-import time
-import os
+import sqlite3, datetime, json, time, os
 
 app = Flask(__name__)
-
-# 允許你的 Netlify 網站呼叫（可再加其他網域）
+# 允許你的前端網域（可自行加上多個）
 CORS(app, resources={r"/*": {
     "origins": [
         "https://comfy-puffpuff-2afc75.netlify.app"
@@ -25,46 +19,35 @@ def get_conn():
     conn.execute("PRAGMA busy_timeout=5000;")
     return conn
 
-def now_ms() -> int:
-    return int(time.time() * 1000)
-
 def init_db():
     with get_conn() as conn:
         c = conn.cursor()
         # 訂單表
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS orders (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                table_num TEXT,
-                time TEXT,            -- 例如 2025-08-12 12:34:56
-                items TEXT,           -- JSON
-                status TEXT DEFAULT 'new'
-            )
-        ''')
-        # 加欄位（如果已存在就忽略）
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            table_num TEXT,
+            time TEXT,
+            items TEXT,
+            status TEXT DEFAULT 'new'
+        )""")
         try:
             c.execute("ALTER TABLE orders ADD COLUMN status TEXT DEFAULT 'new'")
         except Exception:
             pass
         c.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_orders_time ON orders(time)")
-
-        # 估清狀態表（單筆 id=1）
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS soldout_state (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                items TEXT NOT NULL DEFAULT '[]',  -- 內容格式：[[catIndex, itemIndex], ...]
-                updated_at INTEGER NOT NULL DEFAULT 0
-            )
-        ''')
-        c.execute("SELECT COUNT(1) FROM soldout_state WHERE id=1")
-        if c.fetchone()[0] == 0:
-            c.execute("INSERT INTO soldout_state (id, items, updated_at) VALUES (1, '[]', ?)", (now_ms(),))
-
+        # 估清表（跨裝置）
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS soldout (
+            category_idx INTEGER NOT NULL,
+            item_idx INTEGER NOT NULL,
+            updated_at TEXT DEFAULT (datetime('now','localtime')),
+            PRIMARY KEY (category_idx, item_idx)
+        )""")
         conn.commit()
 
 def to_ts_ms(dt_str: str) -> int:
-    """把 'YYYY-mm-dd HH:MM:SS' 轉成毫秒 timestamp（Android 期待毫秒）"""
     try:
         dt = datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
         return int(dt.timestamp() * 1000)
@@ -72,7 +55,6 @@ def to_ts_ms(dt_str: str) -> int:
         return int(time.time() * 1000)
 
 def normalize_item(item: dict) -> dict:
-    """正規化 item 結構，讓 Android RawOrder->SimpleCartItem 能解析"""
     name = str(item.get("name", item.get("product", {}).get("name", "")))
     price = int(item.get("price", item.get("product", {}).get("price", 0)))
     qty = int(item.get("qty", 1))
@@ -80,10 +62,7 @@ def normalize_item(item: dict) -> dict:
 
     drink_obj = item.get("drink")
     if isinstance(drink_obj, dict):
-        drink = {
-            "name": str(drink_obj.get("name", "")),
-            "price": int(drink_obj.get("price", 0))
-        }
+        drink = {"name": str(drink_obj.get("name", "")), "price": int(drink_obj.get("price", 0))}
     else:
         drink = None
 
@@ -91,30 +70,21 @@ def normalize_item(item: dict) -> dict:
     if main_option is not None:
         main_option = str(main_option)
 
-    return {
-        "name": name,
-        "price": price,
-        "qty": qty,
-        "remark": remark,
-        "drink": drink,
-        "mainOption": main_option
-    }
+    return {"name": name, "price": price, "qty": qty, "remark": remark, "drink": drink, "mainOption": main_option}
 
-# ★ Gunicorn 載入模組時就先建表（避免 500: no such table）
+# 啟動時建表
 init_db()
 
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({"status": "ok"})
 
-# ===================== 訂單 API =====================
-
+# ========= 訂單 =========
 @app.route('/order', methods=['POST'])
 def order():
     data = request.get_json(force=True, silent=True) or {}
     table_num = str(data.get("table", ""))
     order_time = str(data.get("time", datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-
     raw_items = data.get("items", [])
     if not isinstance(raw_items, list):
         raw_items = []
@@ -123,10 +93,8 @@ def order():
 
     with get_conn() as conn:
         c = conn.cursor()
-        c.execute(
-            "INSERT INTO orders (table_num, time, items, status) VALUES (?, ?, ?, 'new')",
-            (table_num, order_time, items_json)
-        )
+        c.execute("INSERT INTO orders (table_num, time, items, status) VALUES (?, ?, ?, 'new')",
+                  (table_num, order_time, items_json))
         conn.commit()
         new_id = c.lastrowid
 
@@ -147,8 +115,6 @@ def get_orders():
             items = json.loads(items_json)
         except Exception:
             items = []
-
-        # 計價（飲料價差以 40 為基準）
         total = 0
         for it in items:
             price = int(it.get("price", 0))
@@ -164,26 +130,10 @@ def get_orders():
             "id": int(oid),
             "tableNo": str(table_num),
             "total": int(total),
-            "timestamp": to_ts_ms(time_str),  # 毫秒
-            "items": items                    # Android 端會以 RawOrder 解析
+            "timestamp": to_ts_ms(time_str),
+            "items": items
         })
     return jsonify(orders)
-
-@app.route('/orders/ack', methods=['POST'])
-def ack_orders():
-    """批次標記已處理：接收 {"ids":[1,2,3]}"""
-    data = request.get_json(force=True, silent=True) or {}
-    ids = data.get("ids", [])
-    if not isinstance(ids, list) or not ids:
-        return jsonify({"status": "bad_request", "msg": "ids must be a non-empty list"}), 400
-
-    q_marks = ",".join(["?"] * len(ids))
-    with get_conn() as conn:
-        c = conn.cursor()
-        c.execute(f"UPDATE orders SET status='done' WHERE id IN ({q_marks})", ids)
-        conn.commit()
-
-    return jsonify({"status": "ok", "updated": len(ids)})
 
 @app.route('/orders/<int:order_id>/done', methods=['POST'])
 def order_done(order_id):
@@ -193,9 +143,21 @@ def order_done(order_id):
         conn.commit()
     return jsonify({"status": "ok"})
 
+@app.route('/orders/ack', methods=['POST'])
+def ack_orders():
+    data = request.get_json(force=True, silent=True) or {}
+    ids = data.get("ids", [])
+    if not isinstance(ids, list) or not ids:
+        return jsonify({"status": "bad_request", "msg": "ids must be a non-empty list"}), 400
+    q = ",".join(["?"] * len(ids))
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute(f"UPDATE orders SET status='done' WHERE id IN ({q})", ids)
+        conn.commit()
+    return jsonify({"status": "ok", "updated": len(ids)})
+
 @app.route('/orders/delete_all', methods=['POST'])
 def delete_all_orders():
-    """不建議正式流程用，請改用 /orders/ack"""
     with get_conn() as conn:
         c = conn.cursor()
         c.execute('DELETE FROM orders')
@@ -204,74 +166,54 @@ def delete_all_orders():
 
 @app.route('/orders/purge_done', methods=['POST'])
 def purge_done():
-    """清掉已完成且超過 N 天的訂單（預設 3 天）。body: {"days": 3}"""
     data = request.get_json(force=True, silent=True) or {}
     days = int(data.get("days", 3))
     cutoff = datetime.datetime.now() - datetime.timedelta(days=days)
     cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S")
-
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("DELETE FROM orders WHERE status='done' AND time < ?", (cutoff_str,))
         conn.commit()
         count = c.rowcount
-
     return jsonify({"status": "ok", "deleted": count})
 
-# ===================== 估清（跨裝置同步）API =====================
-
+# ========= 估清（跨裝置同步） =========
 @app.route('/soldout', methods=['GET'])
-def get_soldout():
-    """取得目前估清陣列。格式：{"items":[[catIdx,itemIdx],...], "updatedAt": 1710000000000}"""
+def soldout_get():
     with get_conn() as conn:
         c = conn.cursor()
-        c.execute("SELECT items, updated_at FROM soldout_state WHERE id=1")
-        row = c.fetchone()
-    items_json = row[0] if row else '[]'
-    updated = int(row[1]) if row else 0
-    try:
-        items = json.loads(items_json)
-    except Exception:
-        items = []
-    return jsonify({"items": items, "updatedAt": updated})
+        c.execute("SELECT category_idx, item_idx FROM soldout ORDER BY category_idx, item_idx")
+        rows = c.fetchall()
+    items = [[int(r[0]), int(r[1])] for r in rows]
+    return jsonify({"items": items})
 
-@app.route('/soldout', methods=['PUT', 'POST'])
-def put_soldout():
-    """
-    更新估清陣列。body:
-      {
-        "items": [[catIdx, itemIdx], ...],
-        "updatedAt": 1710000000000   # 可省略，後端會覆蓋為現在時間
-      }
-    """
+@app.route('/soldout', methods=['PUT'])
+def soldout_put():
     data = request.get_json(force=True, silent=True) or {}
     items = data.get("items", [])
+    if not isinstance(items, list):
+        items = []
+    # 驗證 & 去重
+    cleaned = []
+    seen = set()
+    for v in items:
+        if not (isinstance(v, (list, tuple)) and len(v) == 2):
+            continue
+        c_idx, i_idx = int(v[0]), int(v[1])
+        key = (c_idx, i_idx)
+        if key in seen: 
+            continue
+        seen.add(key)
+        cleaned.append(key)
 
-    # 基本驗證：必須是 [ [int,int], ... ]
-    clean = []
-    if isinstance(items, list):
-        for p in items:
-            if isinstance(p, (list, tuple)) and len(p) == 2:
-                try:
-                    clean.append([int(p[0]), int(p[1])])
-                except Exception:
-                    pass
-
-    ts = now_ms()
     with get_conn() as conn:
         c = conn.cursor()
-        c.execute(
-            "UPDATE soldout_state SET items=?, updated_at=? WHERE id=1",
-            (json.dumps(clean, ensure_ascii=False), ts)
-        )
+        c.execute("DELETE FROM soldout")
+        if cleaned:
+            c.executemany("INSERT INTO soldout (category_idx, item_idx, updated_at) VALUES (?, ?, datetime('now','localtime'))", cleaned)
         conn.commit()
-
-    print(f"[SOLDOUT] updated {len(clean)} items at {ts}")
-    return jsonify({"ok": True, "items": clean, "updatedAt": ts})
-
-# =====================================================
+    return jsonify({"status": "ok", "count": len(cleaned)})
 
 if __name__ == '__main__':
-    # 本機跑才會進來；Railway/Gunicorn 會用 Procfile 啟動
     port = int(os.environ.get('PORT', 8000))
     app.run(host='0.0.0.0', port=port)
