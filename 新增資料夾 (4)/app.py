@@ -1,3 +1,4 @@
+# server.py
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import sqlite3
@@ -7,6 +8,7 @@ import time
 import os
 
 app = Flask(__name__)
+
 # 允許你的 Netlify 網站呼叫（可再加其他網域）
 CORS(app, resources={r"/*": {
     "origins": [
@@ -23,9 +25,13 @@ def get_conn():
     conn.execute("PRAGMA busy_timeout=5000;")
     return conn
 
+def now_ms() -> int:
+    return int(time.time() * 1000)
+
 def init_db():
     with get_conn() as conn:
         c = conn.cursor()
+        # 訂單表
         c.execute('''
             CREATE TABLE IF NOT EXISTS orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,12 +41,26 @@ def init_db():
                 status TEXT DEFAULT 'new'
             )
         ''')
+        # 加欄位（如果已存在就忽略）
         try:
             c.execute("ALTER TABLE orders ADD COLUMN status TEXT DEFAULT 'new'")
         except Exception:
             pass
         c.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_orders_time ON orders(time)")
+
+        # 估清狀態表（單筆 id=1）
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS soldout_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                items TEXT NOT NULL DEFAULT '[]',  -- 內容格式：[[catIndex, itemIndex], ...]
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )
+        ''')
+        c.execute("SELECT COUNT(1) FROM soldout_state WHERE id=1")
+        if c.fetchone()[0] == 0:
+            c.execute("INSERT INTO soldout_state (id, items, updated_at) VALUES (1, '[]', ?)", (now_ms(),))
+
         conn.commit()
 
 def to_ts_ms(dt_str: str) -> int:
@@ -87,6 +107,8 @@ init_db()
 def health():
     return jsonify({"status": "ok"})
 
+# ===================== 訂單 API =====================
+
 @app.route('/order', methods=['POST'])
 def order():
     data = request.get_json(force=True, silent=True) or {}
@@ -126,7 +148,7 @@ def get_orders():
         except Exception:
             items = []
 
-        # 計價（可依你規則調整；這裡示例：飲料價差以 40 為基準）
+        # 計價（飲料價差以 40 為基準）
         total = 0
         for it in items:
             price = int(it.get("price", 0))
@@ -195,6 +217,59 @@ def purge_done():
         count = c.rowcount
 
     return jsonify({"status": "ok", "deleted": count})
+
+# ===================== 估清（跨裝置同步）API =====================
+
+@app.route('/soldout', methods=['GET'])
+def get_soldout():
+    """取得目前估清陣列。格式：{"items":[[catIdx,itemIdx],...], "updatedAt": 1710000000000}"""
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("SELECT items, updated_at FROM soldout_state WHERE id=1")
+        row = c.fetchone()
+    items_json = row[0] if row else '[]'
+    updated = int(row[1]) if row else 0
+    try:
+        items = json.loads(items_json)
+    except Exception:
+        items = []
+    return jsonify({"items": items, "updatedAt": updated})
+
+@app.route('/soldout', methods=['PUT', 'POST'])
+def put_soldout():
+    """
+    更新估清陣列。body:
+      {
+        "items": [[catIdx, itemIdx], ...],
+        "updatedAt": 1710000000000   # 可省略，後端會覆蓋為現在時間
+      }
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    items = data.get("items", [])
+
+    # 基本驗證：必須是 [ [int,int], ... ]
+    clean = []
+    if isinstance(items, list):
+        for p in items:
+            if isinstance(p, (list, tuple)) and len(p) == 2:
+                try:
+                    clean.append([int(p[0]), int(p[1])])
+                except Exception:
+                    pass
+
+    ts = now_ms()
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute(
+            "UPDATE soldout_state SET items=?, updated_at=? WHERE id=1",
+            (json.dumps(clean, ensure_ascii=False), ts)
+        )
+        conn.commit()
+
+    print(f"[SOLDOUT] updated {len(clean)} items at {ts}")
+    return jsonify({"ok": True, "items": clean, "updatedAt": ts})
+
+# =====================================================
 
 if __name__ == '__main__':
     # 本機跑才會進來；Railway/Gunicorn 會用 Procfile 啟動
