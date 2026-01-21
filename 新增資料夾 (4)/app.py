@@ -1,7 +1,16 @@
+import os
+import json
+import time
+import uuid
+import sqlite3
+import datetime
+
+import eventlet
+eventlet.monkey_patch()
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_socketio import SocketIO, join_room, leave_room, emit
-import sqlite3, datetime, json, time, os, uuid
 
 app = Flask(__name__)
 
@@ -36,18 +45,18 @@ def init_db():
     with get_conn() as conn:
         c = conn.cursor()
 
-        # 主單（同一 session_id 只會有一張主單）
+        # 主單：同一 session_id 概念上只會有一張（舊資料若已存在多張，仍可正常跑）
         c.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT UNIQUE,
+            session_id TEXT,
             table_num TEXT,
             time TEXT,
             items TEXT,
             status TEXT DEFAULT 'new'
         )""")
 
-        # 為了相容你舊資料庫：可能沒有 UNIQUE / 欄位
+        # 相容舊資料庫（可能缺欄位）
         try:
             c.execute("ALTER TABLE orders ADD COLUMN session_id TEXT")
         except Exception:
@@ -57,7 +66,6 @@ def init_db():
         except Exception:
             pass
 
-        # 若舊表沒有 unique，這裡用 index 先頂著（SQLite 無法直接 ALTER UNIQUE）
         c.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_orders_time ON orders(time)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_orders_session ON orders(session_id)")
@@ -190,15 +198,25 @@ def save_session_cart(session_id: str, cart: list):
 def load_order_by_session(session_id: str):
     with get_conn() as conn:
         c = conn.cursor()
-        c.execute("SELECT id, session_id, table_num, time, items, status FROM orders WHERE session_id=?", (session_id,))
+        # 若舊資料有多張同 session_id，取最新一張（id 最大）
+        c.execute("""
+            SELECT id, session_id, table_num, time, items, status
+            FROM orders
+            WHERE session_id=?
+            ORDER BY id DESC
+            LIMIT 1
+        """, (session_id,))
         row = c.fetchone()
+
     if not row:
         return None
+
     oid, sid, table_num, time_str, items_json, status = row
     try:
         items = json.loads(items_json) if items_json else []
     except Exception:
         items = []
+
     return {
         "id": int(oid),
         "sessionId": sid,
@@ -213,8 +231,8 @@ def load_order_by_session(session_id: str):
 
 def append_items_to_order(session_id: str, table_num: str, new_items: list):
     """
-    核心：同一個 sessionId 只保留一張主單。
-    - 若主單不存在：建立一張 orders
+    核心：同一個 sessionId 只保留一張主單（概念）。
+    - 若主單不存在：建立 orders
     - 若已存在：把 new_items 追加到 items JSON（累加明細）
     """
     new_items = [normalize_cart_item(i) for i in (new_items or []) if isinstance(i, dict)]
@@ -223,11 +241,16 @@ def append_items_to_order(session_id: str, table_num: str, new_items: list):
 
     with get_conn() as conn:
         c = conn.cursor()
-        c.execute("SELECT id, items FROM orders WHERE session_id=?", (session_id,))
+        c.execute("""
+            SELECT id, items
+            FROM orders
+            WHERE session_id=?
+            ORDER BY id DESC
+            LIMIT 1
+        """, (session_id,))
         row = c.fetchone()
 
         if not row:
-            # 建立主單
             order_time = now_str()
             items_json = json.dumps(new_items, ensure_ascii=False)
             c.execute(
@@ -237,7 +260,6 @@ def append_items_to_order(session_id: str, table_num: str, new_items: list):
             conn.commit()
             return int(c.lastrowid)
 
-        # 已有主單：追加明細
         order_id, old_items_json = row
         try:
             old_items = json.loads(old_items_json) if old_items_json else []
@@ -341,7 +363,7 @@ def order_done(order_id):
 @app.route('/order_by_session/<session_id>', methods=['GET'])
 def order_by_session(session_id):
     """
-    ✅ 給前端「訂單明細頁」用：用 4位訂單代碼（sessionId）查主單明細
+    用 sessionId 查主單明細（保留給你舊前端/測試）
     """
     session_id = str(session_id).strip()
     if not session_id:
@@ -350,6 +372,23 @@ def order_by_session(session_id):
     od = load_order_by_session(session_id)
     if not od:
         return jsonify({"ok": True, "exists": False, "order": None})
+    return jsonify({"ok": True, "exists": True, "order": od})
+
+
+@app.route('/order_detail/<session_id>', methods=['GET'])
+def order_detail(session_id):
+    """
+    ✅ 給前端「訂單明細頁」用：/order_detail/2581
+    回傳：{ ok, exists, order }
+    """
+    session_id = str(session_id).strip()
+    if not session_id:
+        return jsonify({"ok": False, "msg": "sessionId required"}), 400
+
+    od = load_order_by_session(session_id)
+    if not od:
+        return jsonify({"ok": True, "exists": False, "order": None})
+
     return jsonify({"ok": True, "exists": True, "order": od})
 
 
@@ -546,7 +585,7 @@ def on_cart_add(data):
 
     cart = get_session_cart(session_id)
     cart.append(normalize_cart_item(item))
-    cart = save_session_cart(session_id, cart)
+    save_session_cart(session_id, cart)
     broadcast_state(session_id)
 
 
@@ -568,7 +607,7 @@ def on_cart_set_qty(data):
         if it.get("lineId") == line_id:
             it["qty"] = max(1, qty)
             break
-    cart = save_session_cart(session_id, cart)
+    save_session_cart(session_id, cart)
     broadcast_state(session_id)
 
 
@@ -590,7 +629,7 @@ def on_cart_set_remark(data):
         if it.get("lineId") == line_id:
             it["remark"] = remark
             break
-    cart = save_session_cart(session_id, cart)
+    save_session_cart(session_id, cart)
     broadcast_state(session_id)
 
 
@@ -608,7 +647,7 @@ def on_cart_remove(data):
 
     cart = get_session_cart(session_id)
     cart = [it for it in cart if it.get("lineId") != line_id]
-    cart = save_session_cart(session_id, cart)
+    save_session_cart(session_id, cart)
 
     _cleanup_expired_locks(session_id)
     room_locks = locks.get(session_id, {})
@@ -621,6 +660,25 @@ def on_cart_remove(data):
     broadcast_state(session_id)
 
 
+@socketio.on("order_detail")
+def on_order_detail(data):
+    """
+    ✅ Socket 查訂單明細：client emit("order_detail", {sessionId})
+    server emit("order_detail_result", {ok, exists, order})
+    """
+    session_id = str((data or {}).get("sessionId", "")).strip()
+    if not session_id:
+        emit("order_detail_result", {"ok": False, "msg": "sessionId required"})
+        return
+
+    od = load_order_by_session(session_id)
+    if not od:
+        emit("order_detail_result", {"ok": True, "exists": False, "order": None})
+        return
+
+    emit("order_detail_result", {"ok": True, "exists": True, "order": od})
+
+
 @socketio.on("submit_cart_as_order")
 def on_submit_cart_as_order(data):
     """
@@ -628,6 +686,7 @@ def on_submit_cart_as_order(data):
     """
     session_id = str((data or {}).get("sessionId", "")).strip()
     table_num = str((data or {}).get("table", "")).strip()
+
     if not session_id:
         emit("submit_result", {"ok": False, "msg": "sessionId required"})
         return
@@ -647,7 +706,12 @@ def on_submit_cart_as_order(data):
     save_session_cart(session_id, [])
     locks.pop(session_id, None)
 
+    # ✅ 回傳成功 + 同步推一次最新明細
     socketio.emit("submit_result", {"ok": True, "orderId": int(order_id)}, room=session_id)
+
+    od = load_order_by_session(session_id)
+    socketio.emit("order_detail_result", {"ok": True, "exists": True, "order": od}, room=session_id)
+
     broadcast_state(session_id)
 
 
