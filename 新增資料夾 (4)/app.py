@@ -6,23 +6,21 @@ import sqlite3, datetime, json, time, os, uuid
 app = Flask(__name__)
 
 # 允許你的前端網域（Netlify）
-CORS(app, resources={r"/*": {
-    "origins": [
-        "https://comfy-puffpuff-2afc75.netlify.app",
-        # 如果你還有其他網域也可以加
-    ]
-}})
+ALLOWED_ORIGINS = [
+    "https://comfy-puffpuff-2afc75.netlify.app",
+]
+
+CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}})
 
 # Socket.IO（WebSocket）
+# ✅ 若你 Railway 有裝 eventlet 就維持 eventlet（0延遲）
+# ✅ 若沒裝 eventlet，請把 async_mode 改成 "threading"（會變長輪詢為主）
 socketio = SocketIO(
     app,
-    cors_allowed_origins=[
-        "https://comfy-puffpuff-2afc75.netlify.app",
-        # 其他網域
-    ],
+    cors_allowed_origins=ALLOWED_ORIGINS,
     async_mode="eventlet",
     ping_interval=20,
-    ping_timeout=30
+    ping_timeout=30,
 )
 
 DB_FILE = "orders.db"
@@ -114,9 +112,11 @@ def normalize_cart_item(item: dict) -> dict:
     qty = int(item.get("qty", 1))
     remark = str(item.get("remark", ""))
     temp = item.get("temp", None)
+
     add_ons = item.get("addOns", [])
     if not isinstance(add_ons, list):
         add_ons = []
+
     cleaned_addons = []
     for a in add_ons:
         if not isinstance(a, dict):
@@ -127,6 +127,7 @@ def normalize_cart_item(item: dict) -> dict:
             "enName": a.get("enName"),
             "price": int(a.get("price", 0))
         })
+
     return {
         "lineId": line_id,
         "name": name,
@@ -157,7 +158,9 @@ def save_session_cart(session_id: str, cart: list):
         c.execute("""
             INSERT INTO sessions (session_id, cart_json, updated_at)
             VALUES (?, ?, datetime('now','localtime'))
-            ON CONFLICT(session_id) DO UPDATE SET cart_json=excluded.cart_json, updated_at=datetime('now','localtime')
+            ON CONFLICT(session_id) DO UPDATE SET
+              cart_json=excluded.cart_json,
+              updated_at=datetime('now','localtime')
         """, (session_id, json.dumps(cart2, ensure_ascii=False)))
         conn.commit()
     return cart2
@@ -211,15 +214,15 @@ def get_room_users(session_id: str):
 def get_room_locks(session_id: str):
     _cleanup_expired_locks(session_id)
     room_locks = locks.get(session_id, {})
-    # 只回傳需要的資訊
     out = {}
     for line_id, v in room_locks.items():
         out[line_id] = {"byName": v.get("byName", "??")}
     return out
 
+# ✅ 關鍵：不要用 emit()，要用 socketio.emit()（避免沒推播）
 def broadcast_state(session_id: str):
     cart = get_session_cart(session_id)
-    emit("session_state", {
+    socketio.emit("session_state", {
         "sessionId": session_id,
         "cart": cart,
         "total": calc_total(cart),
@@ -242,14 +245,16 @@ def order():
     raw_items = data.get("items", [])
     if not isinstance(raw_items, list):
         raw_items = []
-    # 用共享購物車格式也 OK
+
     norm_items = [normalize_cart_item(i) for i in raw_items if isinstance(i, dict)]
     items_json = json.dumps(norm_items, ensure_ascii=False)
 
     with get_conn() as conn:
         c = conn.cursor()
-        c.execute("INSERT INTO orders (session_id, table_num, time, items, status) VALUES (?, ?, ?, ?, 'new')",
-                  (session_id, table_num, order_time, items_json))
+        c.execute(
+            "INSERT INTO orders (session_id, table_num, time, items, status) VALUES (?, ?, ?, ?, 'new')",
+            (session_id, table_num, order_time, items_json)
+        )
         conn.commit()
         new_id = c.lastrowid
 
@@ -304,6 +309,7 @@ def soldout_put():
     items = data.get("items", [])
     if not isinstance(items, list):
         items = []
+
     cleaned = []
     seen = set()
     for v in items:
@@ -320,7 +326,10 @@ def soldout_put():
         c = conn.cursor()
         c.execute("DELETE FROM soldout")
         if cleaned:
-            c.executemany("INSERT INTO soldout (category_idx, item_idx, updated_at) VALUES (?, ?, datetime('now','localtime'))", cleaned)
+            c.executemany(
+                "INSERT INTO soldout (category_idx, item_idx, updated_at) VALUES (?, ?, datetime('now','localtime'))",
+                cleaned
+            )
         conn.commit()
     return jsonify({"status": "ok", "count": len(cleaned)})
 
@@ -343,15 +352,8 @@ def session_clear_cart(session_id):
     session_id = str(session_id).strip()
     ensure_session(session_id)
     save_session_cart(session_id, [])
-    # WS 推播
-    socketio.emit("cart_cleared", {"sessionId": session_id}, room=session_id)
-    socketio.emit("session_state", {
-        "sessionId": session_id,
-        "cart": [],
-        "total": 0,
-        "users": get_room_users(session_id),
-        "locks": get_room_locks(session_id)
-    }, room=session_id)
+    locks.pop(session_id, None)
+    broadcast_state(session_id)
     return jsonify({"status": "ok"})
 
 # ---------------- Socket.IO events ----------------
@@ -367,7 +369,6 @@ def on_join_session(data):
     ensure_session(session_id)
     join_room(session_id)
 
-    # presence
     room = users_in_room.get(session_id, {})
     room[request.sid] = {"nickname": nickname, "joinedAt": int(time.time() * 1000)}
     users_in_room[session_id] = room
@@ -379,7 +380,9 @@ def on_leave_session(data):
     session_id = str((data or {}).get("sessionId", "")).strip()
     if not session_id:
         return
+
     leave_room(session_id)
+
     room = users_in_room.get(session_id, {})
     room.pop(request.sid, None)
     if room:
@@ -387,7 +390,6 @@ def on_leave_session(data):
     else:
         users_in_room.pop(session_id, None)
 
-    # 移除這個人持有的鎖
     _cleanup_expired_locks(session_id)
     room_locks = locks.get(session_id, {})
     dead = [line_id for line_id, v in room_locks.items() if v.get("bySid") == request.sid]
@@ -402,7 +404,6 @@ def on_leave_session(data):
 
 @socketio.on("disconnect")
 def on_disconnect():
-    # 從所有 room 清除
     for session_id, room in list(users_in_room.items()):
         if request.sid in room:
             room.pop(request.sid, None)
@@ -411,7 +412,6 @@ def on_disconnect():
             else:
                 users_in_room.pop(session_id, None)
 
-            # 移除鎖
             _cleanup_expired_locks(session_id)
             room_locks = locks.get(session_id, {})
             dead = [line_id for line_id, v in room_locks.items() if v.get("bySid") == request.sid]
@@ -422,13 +422,7 @@ def on_disconnect():
             else:
                 locks.pop(session_id, None)
 
-            socketio.emit("session_state", {
-                "sessionId": session_id,
-                "cart": get_session_cart(session_id),
-                "total": calc_total(get_session_cart(session_id)),
-                "users": get_room_users(session_id),
-                "locks": get_room_locks(session_id)
-            }, room=session_id)
+            broadcast_state(session_id)
 
 def _require_lock_or_reject(session_id: str, line_id: str):
     _cleanup_expired_locks(session_id)
@@ -459,6 +453,7 @@ def on_lock_line(data):
         emit("lock_denied", {"lineId": line_id, "byName": cur.get("byName", "??")})
         return
 
+    # 自己鎖/續租
     room_locks[line_id] = {
         "bySid": request.sid,
         "byName": nickname,
@@ -491,11 +486,11 @@ def on_cart_add(data):
     item = (data or {}).get("item", {})
     if not session_id or not isinstance(item, dict):
         return
-    ensure_session(session_id)
 
+    ensure_session(session_id)
     cart = get_session_cart(session_id)
     cart.append(normalize_cart_item(item))
-    cart = save_session_cart(session_id, cart)
+    save_session_cart(session_id, cart)
     broadcast_state(session_id)
 
 @socketio.on("cart_set_qty")
@@ -505,6 +500,7 @@ def on_cart_set_qty(data):
     qty = int((data or {}).get("qty", 1))
     if not session_id or not line_id:
         return
+
     ok, reason = _require_lock_or_reject(session_id, line_id)
     if not ok:
         emit("op_rejected", {"reason": reason, "lineId": line_id})
@@ -515,7 +511,7 @@ def on_cart_set_qty(data):
         if it.get("lineId") == line_id:
             it["qty"] = max(1, qty)
             break
-    cart = save_session_cart(session_id, cart)
+    save_session_cart(session_id, cart)
     broadcast_state(session_id)
 
 @socketio.on("cart_set_remark")
@@ -525,6 +521,7 @@ def on_cart_set_remark(data):
     remark = str((data or {}).get("remark", ""))[:80]
     if not session_id or not line_id:
         return
+
     ok, reason = _require_lock_or_reject(session_id, line_id)
     if not ok:
         emit("op_rejected", {"reason": reason, "lineId": line_id})
@@ -535,7 +532,7 @@ def on_cart_set_remark(data):
         if it.get("lineId") == line_id:
             it["remark"] = remark
             break
-    cart = save_session_cart(session_id, cart)
+    save_session_cart(session_id, cart)
     broadcast_state(session_id)
 
 @socketio.on("cart_remove")
@@ -544,6 +541,7 @@ def on_cart_remove(data):
     line_id = str((data or {}).get("lineId", "")).strip()
     if not session_id or not line_id:
         return
+
     ok, reason = _require_lock_or_reject(session_id, line_id)
     if not ok:
         emit("op_rejected", {"reason": reason, "lineId": line_id})
@@ -551,9 +549,8 @@ def on_cart_remove(data):
 
     cart = get_session_cart(session_id)
     cart = [it for it in cart if it.get("lineId") != line_id]
-    cart = save_session_cart(session_id, cart)
+    save_session_cart(session_id, cart)
 
-    # 移除鎖
     _cleanup_expired_locks(session_id)
     room_locks = locks.get(session_id, {})
     room_locks.pop(line_id, None)
