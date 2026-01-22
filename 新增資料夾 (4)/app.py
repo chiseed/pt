@@ -102,6 +102,7 @@ def now_str():
 def to_ts_ms(dt_str: str) -> int:
     try:
         dt = datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+        dt = dt.replace(tzinfo=TZ)  # ✅ 關鍵：指定台北時區
         return int(dt.timestamp() * 1000)
     except Exception:
         return int(time.time() * 1000)
@@ -132,7 +133,7 @@ def normalize_cart_item(item: dict) -> dict:
             "price": int(a.get("price", 0))
         })
 
-     return {
+    return {
         "lineId": line_id,
         "name": name,
         "enName": enName,
@@ -733,5 +734,6 @@ def on_submit_cart_as_order(data):
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
     socketio.run(app, host='0.0.0.0', port=port)
+
 
 
