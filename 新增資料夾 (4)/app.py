@@ -7,7 +7,8 @@ import datetime
 
 import eventlet
 eventlet.monkey_patch()
-
+from zoneinfo import ZoneInfo
+TZ = ZoneInfo("Asia/Taipei")
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_socketio import SocketIO, join_room, leave_room, emit
@@ -95,7 +96,7 @@ init_db()
 
 # ---------------- helpers ----------------
 def now_str():
-    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def to_ts_ms(dt_str: str) -> int:
@@ -107,6 +108,7 @@ def to_ts_ms(dt_str: str) -> int:
 
 
 def normalize_cart_item(item: dict) -> dict:
+    added_by = str(item.get("addedBy", "")).strip()[:20] or None
     line_id = str(item.get("lineId") or uuid.uuid4().hex)
     name = str(item.get("name", ""))
     enName = item.get("enName")
@@ -130,7 +132,7 @@ def normalize_cart_item(item: dict) -> dict:
             "price": int(a.get("price", 0))
         })
 
-    return {
+     return {
         "lineId": line_id,
         "name": name,
         "enName": enName,
@@ -138,7 +140,8 @@ def normalize_cart_item(item: dict) -> dict:
         "qty": max(1, qty),
         "remark": remark,
         "temp": temp,
-        "addOns": cleaned_addons
+        "addOns": cleaned_addons,
+        "addedBy": added_by
     }
 
 
@@ -730,4 +733,5 @@ def on_submit_cart_as_order(data):
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
     socketio.run(app, host='0.0.0.0', port=port)
+
 
