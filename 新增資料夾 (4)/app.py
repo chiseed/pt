@@ -391,6 +391,18 @@ def order_detail(session_id):
 
     return jsonify({"ok": True, "exists": True, "order": od})
 
+@socketio.on("set_nickname")
+def on_set_nickname(data):
+    session_id = str((data or {}).get("sessionId", "")).strip()
+    nickname = str((data or {}).get("nickname", "訪客")).strip()[:20] or "訪客"
+    if not session_id:
+        return
+
+    room = users_in_room.get(session_id, {})
+    if request.sid in room:
+        room[request.sid]["nickname"] = nickname
+        users_in_room[session_id] = room
+        broadcast_state(session_id)
 
 @app.route('/soldout', methods=['GET'])
 def soldout_get():
@@ -718,3 +730,4 @@ def on_submit_cart_as_order(data):
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
     socketio.run(app, host='0.0.0.0', port=port)
+
