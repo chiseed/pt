@@ -17,7 +17,7 @@ app = Flask(__name__)
 
 # 允許你的前端網域（Netlify）
 ALLOWED_ORIGINS = [
-    "https://comfy-puffpuff-2afc75.netlify.app",
+    "https://partnerburger.netlify.app",
 ]
 
 CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}})
@@ -734,6 +734,7 @@ def on_submit_cart_as_order(data):
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
     socketio.run(app, host='0.0.0.0', port=port)
+
 
 
 
