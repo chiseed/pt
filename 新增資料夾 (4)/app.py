@@ -4,11 +4,14 @@ import time
 import uuid
 import sqlite3
 import datetime
+import random
 
 import eventlet
 eventlet.monkey_patch()
+
 from zoneinfo import ZoneInfo
 TZ = ZoneInfo("Asia/Taipei")
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_socketio import SocketIO, join_room, leave_room, emit
@@ -31,6 +34,9 @@ socketio = SocketIO(
 )
 
 DB_FILE = "orders.db"
+
+# ✅ 24 小時 TTL：一天內不重複 / 一天內不刪
+SESSION_TTL_SECONDS = 24 * 60 * 60
 
 
 # ---------------- DB ----------------
@@ -71,7 +77,7 @@ def init_db():
         c.execute("CREATE INDEX IF NOT EXISTS idx_orders_time ON orders(time)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_orders_session ON orders(session_id)")
 
-        # 估清表
+        # 售完表
         c.execute("""
         CREATE TABLE IF NOT EXISTS soldout (
             category_idx INTEGER NOT NULL,
@@ -80,13 +86,26 @@ def init_db():
             PRIMARY KEY (category_idx, item_idx)
         )""")
 
-        # 共享訂單 session（多人同步購物車）
+        # ✅ 共享訂單 session（多人同步購物車）
+        # 加上 created_at / expires_at：用來保證 24h 內不重複
         c.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             session_id TEXT PRIMARY KEY,
             cart_json TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now','localtime')),
+            expires_at TEXT DEFAULT (datetime('now','localtime')),
             updated_at TEXT DEFAULT (datetime('now','localtime'))
         )""")
+
+        # 相容舊資料庫（可能缺欄位）
+        try:
+            c.execute("ALTER TABLE sessions ADD COLUMN created_at TEXT")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE sessions ADD COLUMN expires_at TEXT")
+        except Exception:
+            pass
 
         conn.commit()
 
@@ -95,14 +114,26 @@ init_db()
 
 
 # ---------------- helpers ----------------
+def now_dt():
+    return datetime.datetime.now(TZ)
+
+
 def now_str():
-    return datetime.datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
+    return now_dt().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def dt_to_str(dt: datetime.datetime):
+    return dt.astimezone(TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def expires_str_from_now():
+    return dt_to_str(now_dt() + datetime.timedelta(seconds=SESSION_TTL_SECONDS))
 
 
 def to_ts_ms(dt_str: str) -> int:
     try:
         dt = datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
-        dt = dt.replace(tzinfo=TZ)  # ✅ 關鍵：指定台北時區
+        dt = dt.replace(tzinfo=TZ)  # ✅ 台北時區
         return int(dt.timestamp() * 1000)
     except Exception:
         return int(time.time() * 1000)
@@ -160,15 +191,82 @@ def calc_total(cart: list) -> int:
     return int(total)
 
 
-def ensure_session(session_id: str):
+# ✅ sessions：檢查是否還在 24h 有效期內
+def session_is_active(session_id: str) -> bool:
     with get_conn() as conn:
         c = conn.cursor()
-        c.execute("SELECT 1 FROM sessions WHERE session_id=?", (session_id,))
+        c.execute("SELECT expires_at FROM sessions WHERE session_id=?", (session_id,))
         row = c.fetchone()
-        if row:
+    if not row:
+        return False
+    exp = str(row[0] or "").strip()
+    if not exp:
+        # 舊資料沒有 expires_at 視為 active（保守）
+        return True
+    try:
+        exp_dt = datetime.datetime.strptime(exp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ)
+        return now_dt() < exp_dt
+    except Exception:
+        return True
+
+
+# ✅ 後端產生 4 碼：保證「24 小時內唯一」
+def create_unique_session_id_4() -> str:
+    # 1000~9999 共 9000 種
+    for _ in range(200):  # 夠用了；若你日單量超誇張再改 6 碼
+        sid = str(random.randint(1000, 9999))
+        if not session_is_active(sid):
+            # 這個碼在 24h 內沒被占用 -> 可以用
+            # 立刻 reserve（寫入 sessions）
+            ensure_session(sid, force_reset=True)
+            return sid
+    # 理論上很難走到這裡（除非一天內用了超多碼）
+    raise RuntimeError("No available session_id")
+
+
+def ensure_session(session_id: str, force_reset: bool = False):
+    """
+    ✅ session reservation + TTL
+    - 若 session 不存在：建立並設 expires_at=now+24h
+    - 若存在但已過期：允許重用 -> 重置 cart_json / created_at / expires_at
+    - 若存在且未過期：不動（除非 force_reset=True）
+    """
+    session_id = str(session_id).strip()
+
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("SELECT expires_at FROM sessions WHERE session_id=?", (session_id,))
+        row = c.fetchone()
+
+        if not row:
+            c.execute(
+                "INSERT INTO sessions (session_id, cart_json, created_at, expires_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (session_id, "[]", now_str(), expires_str_from_now(), now_str())
+            )
+            conn.commit()
             return
-        c.execute("INSERT INTO sessions (session_id, cart_json) VALUES (?, ?)", (session_id, "[]"))
-        conn.commit()
+
+        # 已存在
+        exp = str(row[0] or "").strip()
+        expired = False
+        if exp:
+            try:
+                exp_dt = datetime.datetime.strptime(exp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ)
+                expired = now_dt() >= exp_dt
+            except Exception:
+                expired = False
+
+        if force_reset or expired:
+            c.execute("""
+                UPDATE sessions
+                SET cart_json=?, created_at=?, expires_at=?, updated_at=?
+                WHERE session_id=?
+            """, ("[]", now_str(), expires_str_from_now(), now_str(), session_id))
+            conn.commit()
+            return
+
+        # 未過期 -> 保留
+        return
 
 
 def get_session_cart(session_id: str):
@@ -188,13 +286,14 @@ def save_session_cart(session_id: str, cart: list):
     cart2 = [normalize_cart_item(x) for x in (cart or []) if isinstance(x, dict)]
     with get_conn() as conn:
         c = conn.cursor()
+        # ✅ 每次寫入順便延長 updated_at，不延長 expires_at（避免永遠不過期）
         c.execute("""
-            INSERT INTO sessions (session_id, cart_json, updated_at)
-            VALUES (?, ?, datetime('now','localtime'))
+            INSERT INTO sessions (session_id, cart_json, created_at, expires_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 cart_json=excluded.cart_json,
-                updated_at=datetime('now','localtime')
-        """, (session_id, json.dumps(cart2, ensure_ascii=False)))
+                updated_at=excluded.updated_at
+        """, (session_id, json.dumps(cart2, ensure_ascii=False), now_str(), expires_str_from_now(), now_str()))
         conn.commit()
     return cart2
 
@@ -328,6 +427,20 @@ def health():
     return jsonify({"status": "ok"})
 
 
+# ✅ 新增：後端產生 sessionId（24h 內唯一）
+@app.route('/session/new', methods=['POST'])
+def session_new():
+    try:
+        sid = create_unique_session_id_4()
+        return jsonify({
+            "ok": True,
+            "sessionId": sid,
+            "expiresAt": expires_str_from_now()
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
 @app.route('/orders', methods=['GET'])
 def get_orders():
     """
@@ -395,6 +508,7 @@ def order_detail(session_id):
 
     return jsonify({"ok": True, "exists": True, "order": od})
 
+
 @socketio.on("set_nickname")
 def on_set_nickname(data):
     session_id = str((data or {}).get("sessionId", "")).strip()
@@ -407,6 +521,7 @@ def on_set_nickname(data):
         room[request.sid]["nickname"] = nickname
         users_in_room[session_id] = room
         broadcast_state(session_id)
+
 
 @app.route('/soldout', methods=['GET'])
 def soldout_get():
@@ -464,6 +579,21 @@ def session_get(session_id):
 
 
 # ---------------- Socket.IO events ----------------
+
+# ✅ 新增：Socket 版後端產生 sessionId（24h 內唯一）
+@socketio.on("create_session")
+def on_create_session(_data):
+    try:
+        sid = create_unique_session_id_4()
+        emit("create_session_result", {
+            "ok": True,
+            "sessionId": sid,
+            "expiresAt": expires_str_from_now()
+        })
+    except Exception as e:
+        emit("create_session_result", {"ok": False, "msg": str(e)})
+
+
 @socketio.on("join_session")
 def on_join_session(data):
     session_id = str((data or {}).get("sessionId", "")).strip()
@@ -698,7 +828,7 @@ def on_order_detail(data):
 @socketio.on("submit_cart_as_order")
 def on_submit_cart_as_order(data):
     """
-    ✅ 改造重點：同一 sessionId 只會寫入同一張主單（追加 items）。
+    ✅ 同一 sessionId 只會寫入同一張主單（追加 items）。
     """
     session_id = str((data or {}).get("sessionId", "")).strip()
     table_num = str((data or {}).get("table", "")).strip()
@@ -734,7 +864,3 @@ def on_submit_cart_as_order(data):
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
     socketio.run(app, host='0.0.0.0', port=port)
-
-
-
-
