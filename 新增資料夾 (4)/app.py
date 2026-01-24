@@ -16,9 +16,9 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_socketio import SocketIO, join_room, leave_room, emit
 
+# ================== App ==================
 app = Flask(__name__)
 
-# 允許你的前端網域（Netlify）
 ALLOWED_ORIGINS = [
     "https://partnerburger.netlify.app",
 ]
@@ -34,12 +34,10 @@ socketio = SocketIO(
 )
 
 DB_FILE = "orders.db"
-
-# ✅ 24 小時 TTL：一天內不重複 / 一天內不刪
-SESSION_TTL_SECONDS = 24 * 60 * 60
+SESSION_TTL_SECONDS = 24 * 60 * 60  # 24 小時
 
 
-# ---------------- DB ----------------
+# ================== DB ==================
 def get_conn():
     conn = sqlite3.connect(DB_FILE, timeout=10, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL;")
@@ -52,7 +50,6 @@ def init_db():
     with get_conn() as conn:
         c = conn.cursor()
 
-        # 主單：同一 session_id 概念上只會有一張（舊資料若已存在多張，仍可正常跑）
         c.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,49 +60,22 @@ def init_db():
             status TEXT DEFAULT 'new'
         )""")
 
-        # 相容舊資料庫（可能缺欄位）
-        try:
-            c.execute("ALTER TABLE orders ADD COLUMN session_id TEXT")
-        except Exception:
-            pass
-        try:
-            c.execute("ALTER TABLE orders ADD COLUMN status TEXT DEFAULT 'new'")
-        except Exception:
-            pass
-
-        c.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_orders_time ON orders(time)")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_orders_session ON orders(session_id)")
-
-        # 售完表
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS soldout (
-            category_idx INTEGER NOT NULL,
-            item_idx INTEGER NOT NULL,
-            updated_at TEXT DEFAULT (datetime('now','localtime')),
-            PRIMARY KEY (category_idx, item_idx)
-        )""")
-
-        # ✅ 共享訂單 session（多人同步購物車）
-        # 加上 created_at / expires_at：用來保證 24h 內不重複
         c.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             session_id TEXT PRIMARY KEY,
             cart_json TEXT NOT NULL,
-            created_at TEXT DEFAULT (datetime('now','localtime')),
-            expires_at TEXT DEFAULT (datetime('now','localtime')),
-            updated_at TEXT DEFAULT (datetime('now','localtime'))
+            created_at TEXT,
+            expires_at TEXT,
+            updated_at TEXT
         )""")
 
-        # 相容舊資料庫（可能缺欄位）
-        try:
-            c.execute("ALTER TABLE sessions ADD COLUMN created_at TEXT")
-        except Exception:
-            pass
-        try:
-            c.execute("ALTER TABLE sessions ADD COLUMN expires_at TEXT")
-        except Exception:
-            pass
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS soldout (
+            category_idx INTEGER,
+            item_idx INTEGER,
+            updated_at TEXT,
+            PRIMARY KEY (category_idx, item_idx)
+        )""")
 
         conn.commit()
 
@@ -113,7 +83,7 @@ def init_db():
 init_db()
 
 
-# ---------------- helpers ----------------
+# ================== Helpers ==================
 def now_dt():
     return datetime.datetime.now(TZ)
 
@@ -122,116 +92,60 @@ def now_str():
     return now_dt().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def dt_to_str(dt: datetime.datetime):
-    return dt.astimezone(TZ).strftime("%Y-%m-%d %H:%M:%S")
+def expires_str():
+    return (now_dt() + datetime.timedelta(seconds=SESSION_TTL_SECONDS)).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def expires_str_from_now():
-    return dt_to_str(now_dt() + datetime.timedelta(seconds=SESSION_TTL_SECONDS))
-
-
-def to_ts_ms(dt_str: str) -> int:
+def to_ts_ms(s):
     try:
-        dt = datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
-        dt = dt.replace(tzinfo=TZ)  # ✅ 台北時區
-        return int(dt.timestamp() * 1000)
+        d = datetime.datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ)
+        return int(d.timestamp() * 1000)
     except Exception:
         return int(time.time() * 1000)
 
 
 def normalize_cart_item(item: dict) -> dict:
-    added_by = str(item.get("addedBy", "")).strip()[:20] or None
-    line_id = str(item.get("lineId") or uuid.uuid4().hex)
-    name = str(item.get("name", ""))
-    enName = item.get("enName")
-    price = int(item.get("price", 0))
-    qty = int(item.get("qty", 1))
-    remark = str(item.get("remark", ""))
-    temp = item.get("temp", None)
-
-    add_ons = item.get("addOns", [])
-    if not isinstance(add_ons, list):
-        add_ons = []
-
-    cleaned_addons = []
-    for a in add_ons:
-        if not isinstance(a, dict):
-            continue
-        cleaned_addons.append({
-            "key": str(a.get("key", "")),
-            "name": str(a.get("name", "")),
-            "enName": a.get("enName"),
-            "price": int(a.get("price", 0))
-        })
-
     return {
-        "lineId": line_id,
-        "name": name,
-        "enName": enName,
-        "price": price,
-        "qty": max(1, qty),
-        "remark": remark,
-        "temp": temp,
-        "addOns": cleaned_addons,
-        "addedBy": added_by
+        "lineId": item.get("lineId") or uuid.uuid4().hex,
+        "name": str(item.get("name", "")),
+        "enName": item.get("enName"),
+        "price": int(item.get("price", 0)),
+        "qty": max(1, int(item.get("qty", 1))),
+        "remark": str(item.get("remark", "")),
+        "temp": item.get("temp"),
+        "addOns": item.get("addOns", []),
+        "addedBy": str(item.get("addedBy", "")).strip()[:20] or None
     }
 
 
-def calc_total(cart: list) -> int:
+def calc_total(cart):
     total = 0
     for it in cart or []:
-        try:
-            price = int(it.get("price", 0))
-            qty = int(it.get("qty", 1))
-            add_ons = it.get("addOns", []) or []
-            add_sum = sum(int(a.get("price", 0)) for a in add_ons if isinstance(a, dict))
-            total += (price + add_sum) * qty
-        except Exception:
-            pass
-    return int(total)
+        add = sum(int(a.get("price", 0)) for a in it.get("addOns", []) if isinstance(a, dict))
+        total += (int(it.get("price", 0)) + add) * int(it.get("qty", 1))
+    return total
 
 
-# ✅ sessions：檢查是否還在 24h 有效期內
-def session_is_active(session_id: str) -> bool:
+# ================== Session ==================
+def session_is_active(session_id):
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("SELECT expires_at FROM sessions WHERE session_id=?", (session_id,))
         row = c.fetchone()
-    if not row:
+
+    if not row or not row[0]:
         return False
-    exp = str(row[0] or "").strip()
-    if not exp:
-        # 舊資料沒有 expires_at 視為 active（保守）
-        return True
+
     try:
-        exp_dt = datetime.datetime.strptime(exp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ)
-        return now_dt() < exp_dt
+        exp = datetime.datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ)
+        return now_dt() < exp
     except Exception:
-        return True
+        return False
 
 
-# ✅ 後端產生 4 碼：保證「24 小時內唯一」
-def create_unique_session_id_4() -> str:
-    # 1000~9999 共 9000 種
-    for _ in range(200):  # 夠用了；若你日單量超誇張再改 6 碼
-        sid = str(random.randint(1000, 9999))
-        if not session_is_active(sid):
-            # 這個碼在 24h 內沒被占用 -> 可以用
-            # 立刻 reserve（寫入 sessions）
-            ensure_session(sid, force_reset=True)
-            return sid
-    # 理論上很難走到這裡（除非一天內用了超多碼）
-    raise RuntimeError("No available session_id")
-
-
-def ensure_session(session_id: str, force_reset: bool = False):
-    """
-    ✅ session reservation + TTL
-    - 若 session 不存在：建立並設 expires_at=now+24h
-    - 若存在但已過期：允許重用 -> 重置 cart_json / created_at / expires_at
-    - 若存在且未過期：不動（除非 force_reset=True）
-    """
-    session_id = str(session_id).strip()
+def ensure_session(session_id, force_reset=False):
+    if not session_id:
+        return
 
     with get_conn() as conn:
         c = conn.cursor()
@@ -239,628 +153,204 @@ def ensure_session(session_id: str, force_reset: bool = False):
         row = c.fetchone()
 
         if not row:
-            c.execute(
-                "INSERT INTO sessions (session_id, cart_json, created_at, expires_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (session_id, "[]", now_str(), expires_str_from_now(), now_str())
-            )
+            c.execute("""
+                INSERT INTO sessions (session_id, cart_json, created_at, expires_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (session_id, "[]", now_str(), expires_str(), now_str()))
             conn.commit()
             return
 
-        # 已存在
-        exp = str(row[0] or "").strip()
         expired = False
-        if exp:
+        if row[0]:
             try:
-                exp_dt = datetime.datetime.strptime(exp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ)
-                expired = now_dt() >= exp_dt
+                exp = datetime.datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ)
+                expired = now_dt() >= exp
             except Exception:
                 expired = False
 
-        if force_reset or expired:
+        if expired or force_reset:
             c.execute("""
                 UPDATE sessions
                 SET cart_json=?, created_at=?, expires_at=?, updated_at=?
                 WHERE session_id=?
-            """, ("[]", now_str(), expires_str_from_now(), now_str(), session_id))
+            """, ("[]", now_str(), expires_str(), now_str(), session_id))
             conn.commit()
-            return
-
-        # 未過期 -> 保留
-        return
 
 
-def get_session_cart(session_id: str):
+def create_unique_session_id():
+    for _ in range(300):
+        sid = str(random.randint(1000, 9999))
+        if not session_is_active(sid):
+            ensure_session(sid, force_reset=True)
+            return sid
+    raise RuntimeError("No available sessionId")
+
+
+def get_session_cart(session_id):
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("SELECT cart_json FROM sessions WHERE session_id=?", (session_id,))
         row = c.fetchone()
+
     if not row:
         return []
     try:
-        return json.loads(row[0]) if row[0] else []
+        return json.loads(row[0])
     except Exception:
         return []
 
 
-def save_session_cart(session_id: str, cart: list):
-    cart2 = [normalize_cart_item(x) for x in (cart or []) if isinstance(x, dict)]
+def save_session_cart(session_id, cart):
+    cart = [normalize_cart_item(x) for x in cart or []]
     with get_conn() as conn:
         c = conn.cursor()
-        # ✅ 每次寫入順便延長 updated_at，不延長 expires_at（避免永遠不過期）
         c.execute("""
             INSERT INTO sessions (session_id, cart_json, created_at, expires_at, updated_at)
             VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 cart_json=excluded.cart_json,
                 updated_at=excluded.updated_at
-        """, (session_id, json.dumps(cart2, ensure_ascii=False), now_str(), expires_str_from_now(), now_str()))
+        """, (session_id, json.dumps(cart, ensure_ascii=False), now_str(), expires_str(), now_str()))
         conn.commit()
-    return cart2
 
 
-def load_order_by_session(session_id: str):
+# ================== Orders ==================
+def load_order_by_session(session_id):
     with get_conn() as conn:
         c = conn.cursor()
-        # 若舊資料有多張同 session_id，取最新一張（id 最大）
         c.execute("""
-            SELECT id, session_id, table_num, time, items, status
+            SELECT id, table_num, time, items, status
             FROM orders
             WHERE session_id=?
-            ORDER BY id DESC
-            LIMIT 1
+            ORDER BY id DESC LIMIT 1
         """, (session_id,))
         row = c.fetchone()
 
     if not row:
         return None
 
-    oid, sid, table_num, time_str, items_json, status = row
-    try:
-        items = json.loads(items_json) if items_json else []
-    except Exception:
-        items = []
+    oid, table, t, items, status = row
+    items = json.loads(items) if items else []
 
     return {
-        "id": int(oid),
-        "sessionId": sid,
-        "tableNo": str(table_num or ""),
-        "time": time_str,
+        "id": oid,
+        "sessionId": session_id,
+        "tableNo": table,
+        "time": t,
         "status": status,
         "items": items,
         "total": calc_total(items),
-        "timestamp": to_ts_ms(time_str or now_str()),
+        "timestamp": to_ts_ms(t)
     }
 
 
-def append_items_to_order(session_id: str, table_num: str, new_items: list):
-    """
-    核心：同一個 sessionId 只保留一張主單（概念）。
-    - 若主單不存在：建立 orders
-    - 若已存在：把 new_items 追加到 items JSON（累加明細）
-    """
-    new_items = [normalize_cart_item(i) for i in (new_items or []) if isinstance(i, dict)]
+def append_items_to_order(session_id, table, new_items):
+    new_items = [normalize_cart_item(x) for x in new_items or []]
     if not new_items:
         return None
 
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("""
-            SELECT id, items
-            FROM orders
+            SELECT id, items FROM orders
             WHERE session_id=?
-            ORDER BY id DESC
-            LIMIT 1
+            ORDER BY id DESC LIMIT 1
         """, (session_id,))
         row = c.fetchone()
 
         if not row:
-            order_time = now_str()
-            items_json = json.dumps(new_items, ensure_ascii=False)
-            c.execute(
-                "INSERT INTO orders (session_id, table_num, time, items, status) VALUES (?, ?, ?, ?, 'new')",
-                (session_id, table_num, order_time, items_json)
-            )
+            c.execute("""
+                INSERT INTO orders (session_id, table_num, time, items)
+                VALUES (?, ?, ?, ?)
+            """, (session_id, table, now_str(), json.dumps(new_items, ensure_ascii=False)))
             conn.commit()
-            return int(c.lastrowid)
+            return c.lastrowid
 
-        order_id, old_items_json = row
-        try:
-            old_items = json.loads(old_items_json) if old_items_json else []
-        except Exception:
-            old_items = []
-
-        merged = (old_items or []) + new_items
-        c.execute(
-            "UPDATE orders SET items=?, table_num=?, time=? WHERE id=?",
-            (json.dumps(merged, ensure_ascii=False), table_num, now_str(), int(order_id))
-        )
+        oid, old = row
+        merged = json.loads(old or "[]") + new_items
+        c.execute("""
+            UPDATE orders SET items=?, table_num=? WHERE id=?
+        """, (json.dumps(merged, ensure_ascii=False), table, oid))
         conn.commit()
-        return int(order_id)
+        return oid
 
 
-# ---------------- presence & locks (in-memory) ----------------
-users_in_room = {}  # users_in_room[session_id] = { sid: {"nickname": "..."} }
-locks = {}          # locks[session_id][lineId] = {"bySid": "...", "byName": "...", "expiresAt": epoch_ms}
-LOCK_TTL_MS = 12_000
+# ================== Socket ==================
+users_in_room = {}
+locks = {}
+LOCK_TTL_MS = 12000
 
 
-def _cleanup_expired_locks(session_id: str):
-    now_ms = int(time.time() * 1000)
-    room_locks = locks.get(session_id, {})
-    dead = [line_id for line_id, v in room_locks.items() if v.get("expiresAt", 0) < now_ms]
-    for line_id in dead:
-        room_locks.pop(line_id, None)
-    if room_locks:
-        locks[session_id] = room_locks
-    else:
-        locks.pop(session_id, None)
-
-
-def get_room_users(session_id: str):
-    room = users_in_room.get(session_id, {})
-    return [{"sid": sid, "nickname": v.get("nickname", "訪客")} for sid, v in room.items()]
-
-
-def get_room_locks(session_id: str):
-    _cleanup_expired_locks(session_id)
-    room_locks = locks.get(session_id, {})
-    out = {}
-    for line_id, v in room_locks.items():
-        out[line_id] = {"byName": v.get("byName", "訪客")}
-    return out
-
-
-def broadcast_state(session_id: str):
-    cart = get_session_cart(session_id)
+def broadcast_state(session_id):
     socketio.emit("session_state", {
         "sessionId": session_id,
-        "cart": cart,
-        "total": calc_total(cart),
-        "users": get_room_users(session_id),
-        "locks": get_room_locks(session_id)
+        "cart": get_session_cart(session_id),
+        "total": calc_total(get_session_cart(session_id)),
+        "users": list(users_in_room.get(session_id, {}).values()),
+        "locks": locks.get(session_id, {})
     }, room=session_id)
 
 
-# ---------------- REST ----------------
-@app.route('/health', methods=['GET'])
-def health():
-    return jsonify({"status": "ok"})
-
-
-# ✅ 新增：後端產生 sessionId（24h 內唯一）
-@app.route('/session/new', methods=['POST'])
-def session_new():
-    try:
-        sid = create_unique_session_id_4()
-        return jsonify({
-            "ok": True,
-            "sessionId": sid,
-            "expiresAt": expires_str_from_now()
-        })
-    except Exception as e:
-        return jsonify({"ok": False, "msg": str(e)}), 500
-
-
-@app.route('/orders', methods=['GET'])
-def get_orders():
-    """
-    櫃台：顯示所有 new 的主單
-    """
-    with get_conn() as conn:
-        c = conn.cursor()
-        c.execute("SELECT id, session_id, table_num, time, items FROM orders WHERE status='new' ORDER BY id DESC")
-        rows = c.fetchall()
-
-    orders = []
-    for oid, sid, table_num, time_str, items_json in rows:
-        try:
-            items = json.loads(items_json) if items_json else []
-        except Exception:
-            items = []
-        orders.append({
-            "id": int(oid),
-            "sessionId": sid,
-            "tableNo": str(table_num or ""),
-            "total": int(calc_total(items)),
-            "timestamp": to_ts_ms(time_str),
-            "items": items
-        })
-    return jsonify(orders)
-
-
-@app.route('/orders/<int:order_id>/done', methods=['POST'])
-def order_done(order_id):
-    with get_conn() as conn:
-        c = conn.cursor()
-        c.execute("UPDATE orders SET status='done' WHERE id=?", (order_id,))
-        conn.commit()
-    return jsonify({"status": "ok"})
-
-
-@app.route('/order_by_session/<session_id>', methods=['GET'])
-def order_by_session(session_id):
-    """
-    用 sessionId 查主單明細（保留給你舊前端/測試）
-    """
-    session_id = str(session_id).strip()
-    if not session_id:
-        return jsonify({"ok": False, "msg": "sessionId required"}), 400
-
-    od = load_order_by_session(session_id)
-    if not od:
-        return jsonify({"ok": True, "exists": False, "order": None})
-    return jsonify({"ok": True, "exists": True, "order": od})
-
-
-@app.route('/order_detail/<session_id>', methods=['GET'])
-def order_detail(session_id):
-    """
-    ✅ 給前端「訂單明細頁」用：/order_detail/2581
-    回傳：{ ok, exists, order }
-    """
-    session_id = str(session_id).strip()
-    if not session_id:
-        return jsonify({"ok": False, "msg": "sessionId required"}), 400
-
-    od = load_order_by_session(session_id)
-    if not od:
-        return jsonify({"ok": True, "exists": False, "order": None})
-
-    return jsonify({"ok": True, "exists": True, "order": od})
-
-
-@socketio.on("set_nickname")
-def on_set_nickname(data):
-    session_id = str((data or {}).get("sessionId", "")).strip()
-    nickname = str((data or {}).get("nickname", "訪客")).strip()[:20] or "訪客"
-    if not session_id:
-        return
-
-    room = users_in_room.get(session_id, {})
-    if request.sid in room:
-        room[request.sid]["nickname"] = nickname
-        users_in_room[session_id] = room
-        broadcast_state(session_id)
-
-
-@app.route('/soldout', methods=['GET'])
-def soldout_get():
-    with get_conn() as conn:
-        c = conn.cursor()
-        c.execute("SELECT category_idx, item_idx FROM soldout ORDER BY category_idx, item_idx")
-        rows = c.fetchall()
-    items = [[int(r[0]), int(r[1])] for r in rows]
-    return jsonify({"items": items})
-
-
-@app.route('/soldout', methods=['PUT'])
-def soldout_put():
-    data = request.get_json(force=True, silent=True) or {}
-    items = data.get("items", [])
-    if not isinstance(items, list):
-        items = []
-
-    cleaned = []
-    seen = set()
-    for v in items:
-        if not (isinstance(v, (list, tuple)) and len(v) == 2):
-            continue
-        c_idx, i_idx = int(v[0]), int(v[1])
-        key = (c_idx, i_idx)
-        if key in seen:
-            continue
-        seen.add(key)
-        cleaned.append(key)
-
-    with get_conn() as conn:
-        c = conn.cursor()
-        c.execute("DELETE FROM soldout")
-        if cleaned:
-            c.executemany(
-                "INSERT INTO soldout (category_idx, item_idx, updated_at) VALUES (?, ?, datetime('now','localtime'))",
-                cleaned
-            )
-        conn.commit()
-    return jsonify({"status": "ok", "count": len(cleaned)})
-
-
-@app.route('/session/<session_id>', methods=['GET'])
-def session_get(session_id):
-    session_id = str(session_id).strip()
-    ensure_session(session_id)
-    cart = get_session_cart(session_id)
-    return jsonify({
-        "sessionId": session_id,
-        "cart": cart,
-        "total": calc_total(cart),
-        "users": get_room_users(session_id),
-        "locks": get_room_locks(session_id)
-    })
-
-
-# ---------------- Socket.IO events ----------------
-
-# ✅ 新增：Socket 版後端產生 sessionId（24h 內唯一）
 @socketio.on("create_session")
-def on_create_session(_data):
+def on_create_session(_):
     try:
-        sid = create_unique_session_id_4()
-        emit("create_session_result", {
-            "ok": True,
-            "sessionId": sid,
-            "expiresAt": expires_str_from_now()
-        })
+        sid = create_unique_session_id()
+        emit("create_session_result", {"ok": True, "sessionId": sid})
     except Exception as e:
         emit("create_session_result", {"ok": False, "msg": str(e)})
 
 
 @socketio.on("join_session")
-def on_join_session(data):
-    session_id = str((data or {}).get("sessionId", "")).strip()
-    nickname = str((data or {}).get("nickname", "訪客")).strip()[:20] or "訪客"
-
-    if not session_id:
-        emit("error_msg", {"msg": "sessionId required"})
-        return
-
-    ensure_session(session_id)
-    join_room(session_id)
-
-    room = users_in_room.get(session_id, {})
-    room[request.sid] = {"nickname": nickname, "joinedAt": int(time.time() * 1000)}
-    users_in_room[session_id] = room
-
-    broadcast_state(session_id)
-
-
-@socketio.on("leave_session")
-def on_leave_session(data):
-    session_id = str((data or {}).get("sessionId", "")).strip()
-    if not session_id:
-        return
-    leave_room(session_id)
-
-    room = users_in_room.get(session_id, {})
-    room.pop(request.sid, None)
-    if room:
-        users_in_room[session_id] = room
-    else:
-        users_in_room.pop(session_id, None)
-
-    _cleanup_expired_locks(session_id)
-    room_locks = locks.get(session_id, {})
-    dead = [line_id for line_id, v in room_locks.items() if v.get("bySid") == request.sid]
-    for line_id in dead:
-        room_locks.pop(line_id, None)
-    if room_locks:
-        locks[session_id] = room_locks
-    else:
-        locks.pop(session_id, None)
-
-    broadcast_state(session_id)
-
-
-@socketio.on("disconnect")
-def on_disconnect():
-    for session_id, room in list(users_in_room.items()):
-        if request.sid in room:
-            room.pop(request.sid, None)
-            if room:
-                users_in_room[session_id] = room
-            else:
-                users_in_room.pop(session_id, None)
-
-            _cleanup_expired_locks(session_id)
-            room_locks = locks.get(session_id, {})
-            dead = [line_id for line_id, v in room_locks.items() if v.get("bySid") == request.sid]
-            for line_id in dead:
-                room_locks.pop(line_id, None)
-            if room_locks:
-                locks[session_id] = room_locks
-            else:
-                locks.pop(session_id, None)
-
-            broadcast_state(session_id)
-
-
-def _require_lock_or_reject(session_id: str, line_id: str):
-    _cleanup_expired_locks(session_id)
-    room_locks = locks.get(session_id, {})
-    lock = room_locks.get(line_id)
-    if not lock:
-        return False, "no_lock"
-    if lock.get("bySid") != request.sid:
-        return False, "locked_by_other"
-    return True, "ok"
-
-
-@socketio.on("lock_line")
-def on_lock_line(data):
-    session_id = str((data or {}).get("sessionId", "")).strip()
-    line_id = str((data or {}).get("lineId", "")).strip()
-    nickname = str((data or {}).get("nickname", "訪客")).strip()[:20] or "訪客"
-    if not session_id or not line_id:
-        return
-
-    ensure_session(session_id)
-    _cleanup_expired_locks(session_id)
-
-    room_locks = locks.get(session_id, {})
-    now_ms = int(time.time() * 1000)
-    cur = room_locks.get(line_id)
-
-    if cur and cur.get("bySid") != request.sid and cur.get("expiresAt", 0) >= now_ms:
-        emit("lock_denied", {"lineId": line_id, "byName": cur.get("byName", "訪客")})
-        return
-
-    room_locks[line_id] = {
-        "bySid": request.sid,
-        "byName": nickname,
-        "expiresAt": now_ms + LOCK_TTL_MS
-    }
-    locks[session_id] = room_locks
-    socketio.emit("lock_update", {"lineId": line_id, "byName": nickname}, room=session_id)
-
-
-@socketio.on("unlock_line")
-def on_unlock_line(data):
-    session_id = str((data or {}).get("sessionId", "")).strip()
-    line_id = str((data or {}).get("lineId", "")).strip()
-    if not session_id or not line_id:
-        return
-
-    _cleanup_expired_locks(session_id)
-    room_locks = locks.get(session_id, {})
-    cur = room_locks.get(line_id)
-    if cur and cur.get("bySid") == request.sid:
-        room_locks.pop(line_id, None)
-        if room_locks:
-            locks[session_id] = room_locks
-        else:
-            locks.pop(session_id, None)
-        socketio.emit("lock_remove", {"lineId": line_id}, room=session_id)
+def on_join(data):
+    sid = data.get("sessionId")
+    name = data.get("nickname", "訪客")
+    ensure_session(sid)
+    join_room(sid)
+    users_in_room.setdefault(sid, {})[request.sid] = {"sid": request.sid, "nickname": name}
+    broadcast_state(sid)
 
 
 @socketio.on("cart_add")
 def on_cart_add(data):
-    session_id = str((data or {}).get("sessionId", "")).strip()
-    item = (data or {}).get("item", {})
-    if not session_id or not isinstance(item, dict):
-        return
-    ensure_session(session_id)
-
-    cart = get_session_cart(session_id)
-    cart.append(normalize_cart_item(item))
-    save_session_cart(session_id, cart)
-    broadcast_state(session_id)
-
-
-@socketio.on("cart_set_qty")
-def on_cart_set_qty(data):
-    session_id = str((data or {}).get("sessionId", "")).strip()
-    line_id = str((data or {}).get("lineId", "")).strip()
-    qty = int((data or {}).get("qty", 1))
-    if not session_id or not line_id:
-        return
-
-    ok, reason = _require_lock_or_reject(session_id, line_id)
-    if not ok:
-        emit("op_rejected", {"reason": reason, "lineId": line_id})
-        return
-
-    cart = get_session_cart(session_id)
-    for it in cart:
-        if it.get("lineId") == line_id:
-            it["qty"] = max(1, qty)
-            break
-    save_session_cart(session_id, cart)
-    broadcast_state(session_id)
-
-
-@socketio.on("cart_set_remark")
-def on_cart_set_remark(data):
-    session_id = str((data or {}).get("sessionId", "")).strip()
-    line_id = str((data or {}).get("lineId", "")).strip()
-    remark = str((data or {}).get("remark", ""))[:80]
-    if not session_id or not line_id:
-        return
-
-    ok, reason = _require_lock_or_reject(session_id, line_id)
-    if not ok:
-        emit("op_rejected", {"reason": reason, "lineId": line_id})
-        return
-
-    cart = get_session_cart(session_id)
-    for it in cart:
-        if it.get("lineId") == line_id:
-            it["remark"] = remark
-            break
-    save_session_cart(session_id, cart)
-    broadcast_state(session_id)
-
-
-@socketio.on("cart_remove")
-def on_cart_remove(data):
-    session_id = str((data or {}).get("sessionId", "")).strip()
-    line_id = str((data or {}).get("lineId", "")).strip()
-    if not session_id or not line_id:
-        return
-
-    ok, reason = _require_lock_or_reject(session_id, line_id)
-    if not ok:
-        emit("op_rejected", {"reason": reason, "lineId": line_id})
-        return
-
-    cart = get_session_cart(session_id)
-    cart = [it for it in cart if it.get("lineId") != line_id]
-    save_session_cart(session_id, cart)
-
-    _cleanup_expired_locks(session_id)
-    room_locks = locks.get(session_id, {})
-    room_locks.pop(line_id, None)
-    if room_locks:
-        locks[session_id] = room_locks
-    else:
-        locks.pop(session_id, None)
-
-    broadcast_state(session_id)
-
-
-@socketio.on("order_detail")
-def on_order_detail(data):
-    """
-    ✅ Socket 查訂單明細：client emit("order_detail", {sessionId})
-    server emit("order_detail_result", {ok, exists, order})
-    """
-    session_id = str((data or {}).get("sessionId", "")).strip()
-    if not session_id:
-        emit("order_detail_result", {"ok": False, "msg": "sessionId required"})
-        return
-
-    od = load_order_by_session(session_id)
-    if not od:
-        emit("order_detail_result", {"ok": True, "exists": False, "order": None})
-        return
-
-    emit("order_detail_result", {"ok": True, "exists": True, "order": od})
+    sid = data.get("sessionId")
+    ensure_session(sid)
+    cart = get_session_cart(sid)
+    cart.append(data.get("item", {}))
+    save_session_cart(sid, cart)
+    broadcast_state(sid)
 
 
 @socketio.on("submit_cart_as_order")
-def on_submit_cart_as_order(data):
-    """
-    ✅ 同一 sessionId 只會寫入同一張主單（追加 items）。
-    """
-    session_id = str((data or {}).get("sessionId", "")).strip()
-    table_num = str((data or {}).get("table", "")).strip()
-
-    if not session_id:
-        emit("submit_result", {"ok": False, "msg": "sessionId required"})
-        return
-
-    ensure_session(session_id)
-    cart = get_session_cart(session_id)
-    if not cart:
-        emit("submit_result", {"ok": False, "msg": "cart empty"})
-        return
-
-    order_id = append_items_to_order(session_id=session_id, table_num=table_num, new_items=cart)
-    if not order_id:
-        emit("submit_result", {"ok": False, "msg": "append failed"})
-        return
-
-    # 清空購物車但保留 session（可再加點）
-    save_session_cart(session_id, [])
-    locks.pop(session_id, None)
-
-    # ✅ 回傳成功 + 同步推一次最新明細
-    socketio.emit("submit_result", {"ok": True, "orderId": int(order_id)}, room=session_id)
-
-    od = load_order_by_session(session_id)
-    socketio.emit("order_detail_result", {"ok": True, "exists": True, "order": od}, room=session_id)
-
-    broadcast_state(session_id)
+def on_submit(data):
+    sid = data.get("sessionId")
+    table = data.get("table", "")
+    cart = get_session_cart(sid)
+    oid = append_items_to_order(sid, table, cart)
+    save_session_cart(sid, [])
+    emit("submit_result", {"ok": True, "orderId": oid}, room=sid)
+    emit("order_detail_result", {"ok": True, "exists": True, "order": load_order_by_session(sid)}, room=sid)
+    broadcast_state(sid)
 
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8000))
-    socketio.run(app, host='0.0.0.0', port=port)
+# ================== REST ==================
+@app.route("/session/new", methods=["POST"])
+def new_session():
+    sid = create_unique_session_id()
+    return jsonify({"ok": True, "sessionId": sid})
+
+
+@app.route("/order_detail/<sid>")
+def order_detail(sid):
+    o = load_order_by_session(sid)
+    return jsonify({"ok": True, "exists": bool(o), "order": o})
+
+
+@app.route("/health")
+def health():
+    return jsonify({"ok": True})
+
+
+# ================== Run ==================
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    socketio.run(app, host="0.0.0.0", port=port)
