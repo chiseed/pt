@@ -244,6 +244,39 @@ def load_order_by_session(session_id):
     }
 
 
+def load_all_orders(limit=200):
+    """
+    給員工端 / 管理端看的「全部訂單列表」。
+    不修改資料庫，只是把資料讀出來整理成 dict。
+    """
+    limit = max(1, min(int(limit or 200), 500))  # 最多一次 500 筆，避免太大
+
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, session_id, table_num, time, items, status
+            FROM orders
+            ORDER BY id DESC
+            LIMIT ?
+        """, (limit,))
+        rows = c.fetchall()
+
+    orders = []
+    for oid, sid, table, t, items, status in rows:
+        items_list = json.loads(items) if items else []
+        orders.append({
+            "id": oid,
+            "sessionId": sid,
+            "tableNo": table,
+            "time": t,
+            "status": status,
+            "items": items_list,
+            "total": calc_total(items_list),
+            "timestamp": to_ts_ms(t)
+        })
+    return orders
+
+
 def append_items_to_order(session_id, table, new_items):
     new_items = [normalize_cart_item(x) for x in new_items or []]
     if not new_items:
@@ -333,6 +366,22 @@ def on_submit(data):
 
 
 # ================== REST ==================
+@app.route("/api/orders", methods=["GET"])
+def api_orders():
+    """
+    員工 / 後台用：抓全部訂單列表。
+    GET /api/orders?limit=200
+    回傳 {"ok": True, "count": N, "orders": [...]}
+    """
+    try:
+        limit = int(request.args.get("limit", "200"))
+    except ValueError:
+        limit = 200
+
+    orders = load_all_orders(limit)
+    return jsonify({"ok": True, "count": len(orders), "orders": orders})
+
+
 @app.route("/session/new", methods=["POST"])
 def new_session():
     sid = create_unique_session_id()
