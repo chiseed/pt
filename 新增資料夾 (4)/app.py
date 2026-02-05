@@ -19,6 +19,7 @@ from flask_socketio import SocketIO, join_room, leave_room, emit
 # ================== App ==================
 app = Flask(__name__)
 
+# ★ 記得把這裡的網域改成你實際在用的 Netlify 網址
 ALLOWED_ORIGINS = [
     "https://partnerburger.netlify.app",
     "https://illustrious-centaur-327b59.netlify.app",
@@ -36,6 +37,9 @@ socketio = SocketIO(
 
 DB_FILE = "orders.db"
 SESSION_TTL_SECONDS = 24 * 60 * 60  # 24 小時
+
+# 可用的訂單狀態
+ORDER_STATUS_ALLOWED = {"new", "making", "done", "cancelled"}
 
 
 # ================== DB ==================
@@ -246,11 +250,7 @@ def load_order_by_session(session_id):
 
 
 def load_all_orders(limit=200):
-    """
-    給員工端 / 管理端看的「全部訂單列表」。
-    不修改資料庫，只是把資料讀出來整理成 dict。
-    """
-    limit = max(1, min(int(limit or 200), 500))  # 最多一次 500 筆，避免太大
+    limit = max(1, min(int(limit or 200), 500))
 
     with get_conn() as conn:
         c = conn.cursor()
@@ -369,11 +369,7 @@ def on_submit(data):
 # ================== REST ==================
 @app.route("/api/orders", methods=["GET"])
 def api_orders():
-    """
-    員工 / 後台用：抓全部訂單列表。
-    GET /api/orders?limit=200
-    回傳 {"ok": True, "count": N, "orders": [...]}
-    """
+    """列出最近的訂單列表（給員工端 / 管理端用）"""
     try:
         limit = int(request.args.get("limit", "200"))
     except ValueError:
@@ -381,6 +377,25 @@ def api_orders():
 
     orders = load_all_orders(limit)
     return jsonify({"ok": True, "count": len(orders), "orders": orders})
+
+
+@app.route("/api/orders/<int:oid>/status", methods=["POST"])
+def api_update_order_status(oid):
+    """更新單一訂單狀態：new / making / done / cancelled"""
+    data = request.get_json(silent=True) or {}
+    status = str(data.get("status", "")).strip().lower()
+
+    if status not in ORDER_STATUS_ALLOWED:
+        return jsonify({"ok": False, "msg": "invalid status"}), 400
+
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("UPDATE orders SET status=? WHERE id=?", (status, oid))
+        conn.commit()
+        if c.rowcount == 0:
+            return jsonify({"ok": False, "msg": "order not found"}), 404
+
+    return jsonify({"ok": True})
 
 
 @app.route("/session/new", methods=["POST"])
@@ -404,4 +419,3 @@ def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     socketio.run(app, host="0.0.0.0", port=port)
-
