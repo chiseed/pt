@@ -21,6 +21,7 @@ app = Flask(__name__)
 
 ALLOWED_ORIGINS = [
     "https://partnerburger.netlify.app",
+    "https://illustrious-centaur-327b59.netlify.app",
 ]
 
 CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}})
@@ -403,3 +404,4 @@ def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     socketio.run(app, host="0.0.0.0", port=port)
+
