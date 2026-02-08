@@ -119,7 +119,9 @@ def normalize_cart_item(item: dict) -> dict:
         "remark": str(item.get("remark", "")),
         "temp": item.get("temp"),
         "addOns": item.get("addOns", []),
-        "addedBy": str(item.get("addedBy", "")).strip()[:20] or None
+        "addedBy": str(item.get("addedBy", "")).strip()[:20] or None,
+        "category": item.get("category") 
+        
     }
 
 
@@ -419,3 +421,4 @@ def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     socketio.run(app, host="0.0.0.0", port=port)
+
