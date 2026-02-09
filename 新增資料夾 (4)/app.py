@@ -19,7 +19,6 @@ from flask_socketio import SocketIO, join_room, emit
 # ================== App ==================
 app = Flask(__name__)
 
-# ★ 記得把這裡的網域改成你實際在用的 Netlify 網址
 ALLOWED_ORIGINS = [
     "https://partnerburger.netlify.app",
     "https://illustrious-centaur-327b59.netlify.app",
@@ -38,10 +37,7 @@ socketio = SocketIO(
 
 DB_FILE = "orders.db"
 SESSION_TTL_SECONDS = 24 * 60 * 60  # 24 小時
-
-# 可用的訂單狀態
 ORDER_STATUS_ALLOWED = {"new", "making", "done", "cancelled"}
-
 
 # ================== DB ==================
 def get_conn():
@@ -50,7 +46,6 @@ def get_conn():
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute("PRAGMA busy_timeout=5000;")
     return conn
-
 
 def init_db():
     with get_conn() as conn:
@@ -83,7 +78,6 @@ def init_db():
             PRIMARY KEY (category_idx, item_idx)
         )""")
 
-        # ✅ 新增：目前叫號狀態（精準叫號用）
         c.execute("""
         CREATE TABLE IF NOT EXISTS call_state (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -94,24 +88,17 @@ def init_db():
 
         conn.commit()
 
-
 init_db()
-
 
 # ================== Helpers ==================
 def now_dt():
     return datetime.datetime.now(TZ)
 
-
 def now_str():
     return now_dt().strftime("%Y-%m-%d %H:%M:%S")
 
-
 def expires_str():
-    return (now_dt() + datetime.timedelta(seconds=SESSION_TTL_SECONDS)).strftime(
-        "%Y-%m-%d %H:%M:%S"
-    )
-
+    return (now_dt() + datetime.timedelta(seconds=SESSION_TTL_SECONDS)).strftime("%Y-%m-%d %H:%M:%S")
 
 def to_ts_ms(s):
     try:
@@ -119,12 +106,6 @@ def to_ts_ms(s):
         return int(d.timestamp() * 1000)
     except Exception:
         return int(time.time() * 1000)
-
-
-def is_valid_sid(sid: str) -> bool:
-    sid = str(sid or "").strip()
-    return (len(sid) == 4 and sid.isdigit())
-
 
 def normalize_cart_item(item: dict) -> dict:
     return {
@@ -137,24 +118,17 @@ def normalize_cart_item(item: dict) -> dict:
         "temp": item.get("temp"),
         "addOns": item.get("addOns", []),
         "addedBy": str(item.get("addedBy", "")).strip()[:20] or None,
-        # 前端如果有帶分類，就會被存起來（吃堡/單點/飲品/甜點）
         "category": item.get("category"),
     }
-
 
 def calc_total(cart):
     total = 0
     for it in cart or []:
-        add = sum(
-            int(a.get("price", 0))
-            for a in it.get("addOns", [])
-            if isinstance(a, dict)
-        )
+        add = sum(int(a.get("price", 0)) for a in it.get("addOns", []) if isinstance(a, dict))
         total += (int(it.get("price", 0)) + add) * int(it.get("qty", 1))
     return total
 
-
-# ================== Call State (精準叫號) ==================
+# ================== Call State ==================
 def get_call_state():
     with get_conn() as conn:
         c = conn.cursor()
@@ -163,7 +137,6 @@ def get_call_state():
     if not row:
         return {"code": "", "updated_at": 0}
     return {"code": row[0] or "", "updated_at": int(row[1] or 0)}
-
 
 def set_call_code(code: str):
     code = (code or "").strip()
@@ -175,7 +148,6 @@ def set_call_code(code: str):
     socketio.emit("call_update", {"ok": True, "code": code, "updatedAt": now_ts})
     return True
 
-
 def get_session_id_by_order_id(oid: int):
     with get_conn() as conn:
         c = conn.cursor()
@@ -183,12 +155,8 @@ def get_session_id_by_order_id(oid: int):
         row = c.fetchone()
     return row[0] if row else None
 
-
 # ================== Session ==================
 def session_is_active(session_id):
-    if not is_valid_sid(session_id):
-        return False
-
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("SELECT expires_at FROM sessions WHERE session_id=?", (session_id,))
@@ -198,28 +166,13 @@ def session_is_active(session_id):
         return False
 
     try:
-        exp = datetime.datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").replace(
-            tzinfo=TZ
-        )
+        exp = datetime.datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ)
         return now_dt() < exp
     except Exception:
         return False
 
-
-def session_exists(session_id) -> bool:
-    """只檢查資料列是否存在（不管過期與否）"""
-    if not is_valid_sid(session_id):
-        return False
-    with get_conn() as conn:
-        c = conn.cursor()
-        c.execute("SELECT 1 FROM sessions WHERE session_id=? LIMIT 1", (session_id,))
-        return c.fetchone() is not None
-
-
 def ensure_session(session_id, force_reset=False):
     if not session_id:
-        return
-    if not is_valid_sid(session_id):
         return
 
     with get_conn() as conn:
@@ -228,37 +181,28 @@ def ensure_session(session_id, force_reset=False):
         row = c.fetchone()
 
         if not row:
-            c.execute(
-                """
+            c.execute("""
                 INSERT INTO sessions (session_id, cart_json, created_at, expires_at, updated_at)
                 VALUES (?, ?, ?, ?, ?)
-            """,
-                (session_id, "[]", now_str(), expires_str(), now_str()),
-            )
+            """, (session_id, "[]", now_str(), expires_str(), now_str()))
             conn.commit()
             return
 
         expired = False
         if row[0]:
             try:
-                exp = datetime.datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").replace(
-                    tzinfo=TZ
-                )
+                exp = datetime.datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ)
                 expired = now_dt() >= exp
             except Exception:
                 expired = False
 
         if expired or force_reset:
-            c.execute(
-                """
+            c.execute("""
                 UPDATE sessions
                 SET cart_json=?, created_at=?, expires_at=?, updated_at=?
                 WHERE session_id=?
-            """,
-                ("[]", now_str(), expires_str(), now_str(), session_id),
-            )
+            """, ("[]", now_str(), expires_str(), now_str(), session_id))
             conn.commit()
-
 
 def create_unique_session_id():
     for _ in range(300):
@@ -268,15 +212,11 @@ def create_unique_session_id():
             return sid
     raise RuntimeError("No available sessionId")
 
-
 def get_session_cart(session_id):
-    if not is_valid_sid(session_id):
-        return []
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("SELECT cart_json FROM sessions WHERE session_id=?", (session_id,))
         row = c.fetchone()
-
     if not row:
         return []
     try:
@@ -284,57 +224,30 @@ def get_session_cart(session_id):
     except Exception:
         return []
 
-
 def save_session_cart(session_id, cart):
-    if not is_valid_sid(session_id):
-        return
     cart = [normalize_cart_item(x) for x in cart or []]
     with get_conn() as conn:
         c = conn.cursor()
-        c.execute(
-            """
+        c.execute("""
             INSERT INTO sessions (session_id, cart_json, created_at, expires_at, updated_at)
             VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 cart_json=excluded.cart_json,
-                updated_at=excluded.updated_at
-        """,
-            (
-                session_id,
-                json.dumps(cart, ensure_ascii=False),
-                now_str(),
-                expires_str(),
-                now_str(),
-            ),
-        )
+                updated_at=excluded.updated_at,
+                expires_at=excluded.expires_at
+        """, (session_id, json.dumps(cart, ensure_ascii=False), now_str(), expires_str(), now_str()))
         conn.commit()
-
-
-def require_active_session_or_reject(sid: str, room: str = None, reason: str = "查無此訂單代碼或已過期"):
-    """Socket 用：不存在/過期就拒絕，避免自動開單。"""
-    if not is_valid_sid(sid) or not session_is_active(sid):
-        # 前端有接 op_rejected
-        emit("op_rejected", {"reason": reason}, room=room)
-        return False
-    return True
-
 
 # ================== Orders ==================
 def load_order_by_session(session_id):
-    if not is_valid_sid(session_id):
-        return None
-
     with get_conn() as conn:
         c = conn.cursor()
-        c.execute(
-            """
+        c.execute("""
             SELECT id, table_num, time, items, status
             FROM orders
             WHERE session_id=?
             ORDER BY id DESC LIMIT 1
-        """,
-            (session_id,),
-        )
+        """, (session_id,))
         row = c.fetchone()
 
     if not row:
@@ -342,7 +255,6 @@ def load_order_by_session(session_id):
 
     oid, table, t, items, status = row
     items = json.loads(items) if items else []
-
     return {
         "id": oid,
         "sessionId": session_id,
@@ -354,40 +266,32 @@ def load_order_by_session(session_id):
         "timestamp": to_ts_ms(t),
     }
 
-
 def load_all_orders(limit=200):
     limit = max(1, min(int(limit or 200), 500))
-
     with get_conn() as conn:
         c = conn.cursor()
-        c.execute(
-            """
+        c.execute("""
             SELECT id, session_id, table_num, time, items, status
             FROM orders
             ORDER BY id DESC
             LIMIT ?
-        """,
-            (limit,),
-        )
+        """, (limit,))
         rows = c.fetchall()
 
     orders = []
     for oid, sid, table, t, items, status in rows:
         items_list = json.loads(items) if items else []
-        orders.append(
-            {
-                "id": oid,
-                "sessionId": sid,
-                "tableNo": table,
-                "time": t,
-                "status": status,
-                "items": items_list,
-                "total": calc_total(items_list),
-                "timestamp": to_ts_ms(t),
-            }
-        )
+        orders.append({
+            "id": oid,
+            "sessionId": sid,
+            "tableNo": table,
+            "time": t,
+            "status": status,
+            "items": items_list,
+            "total": calc_total(items_list),
+            "timestamp": to_ts_ms(t),
+        })
     return orders
-
 
 def append_items_to_order(session_id, table, new_items):
     new_items = [normalize_cart_item(x) for x in new_items or []]
@@ -396,69 +300,56 @@ def append_items_to_order(session_id, table, new_items):
 
     with get_conn() as conn:
         c = conn.cursor()
-        c.execute(
-            """
+        c.execute("""
             SELECT id, items FROM orders
             WHERE session_id=?
             ORDER BY id DESC LIMIT 1
-        """,
-            (session_id,),
-        )
+        """, (session_id,))
         row = c.fetchone()
 
         if not row:
-            c.execute(
-                """
+            c.execute("""
                 INSERT INTO orders (session_id, table_num, time, items)
                 VALUES (?, ?, ?, ?)
-            """,
-                (session_id, table, now_str(), json.dumps(new_items, ensure_ascii=False)),
-            )
+            """, (session_id, table, now_str(), json.dumps(new_items, ensure_ascii=False)))
             conn.commit()
             return c.lastrowid
 
         oid, old = row
         merged = json.loads(old or "[]") + new_items
-        c.execute(
-            """
+        c.execute("""
             UPDATE orders SET items=?, table_num=? WHERE id=?
-        """,
-            (json.dumps(merged, ensure_ascii=False), table, oid),
-        )
+        """, (json.dumps(merged, ensure_ascii=False), table, oid))
         conn.commit()
         return oid
 
+# ================== Socket State ==================
+users_in_room = {}   # {sessionId: {socketSid: {sid,nickname}}}
+locks_in_room = {}   # {sessionId: {lineId: {bySid, byName, ts}}}
 
-# ================== Socket ==================
-users_in_room = {}
-
+def locks_public(session_id):
+    d = locks_in_room.get(session_id, {}) or {}
+    return {lineId: {"byName": v.get("byName")} for lineId, v in d.items()}
 
 def broadcast_state(session_id):
+    cart = get_session_cart(session_id)
     socketio.emit(
         "session_state",
         {
             "sessionId": session_id,
-            "cart": get_session_cart(session_id),
-            "total": calc_total(get_session_cart(session_id)),
+            "cart": cart,
+            "total": calc_total(cart),
             "users": list(users_in_room.get(session_id, {}).values()),
+            "locks": locks_public(session_id),
         },
         room=session_id,
     )
 
-
-@socketio.on("disconnect")
-def on_disconnect():
-    # 清掉 users_in_room 裡這個 socket
-    for sid, members in list(users_in_room.items()):
-        if request.sid in members:
-            del members[request.sid]
-            if not members:
-                users_in_room.pop(sid, None)
-            else:
-                # 有人在房內才廣播更新
-                broadcast_state(sid)
-            break
-
+def _find_item_idx(cart, line_id: str):
+    for i, it in enumerate(cart or []):
+        if str(it.get("lineId", "")) == str(line_id):
+            return i
+    return -1
 
 @socketio.on("create_session")
 def on_create_session(_):
@@ -468,110 +359,212 @@ def on_create_session(_):
     except Exception as e:
         emit("create_session_result", {"ok": False, "msg": str(e)})
 
-
 @socketio.on("join_session")
 def on_join(data):
-    data = data or {}
-    sid = str(data.get("sessionId", "")).strip()
-    name = str(data.get("nickname", "訪客")).strip()[:12] or "訪客"
-
-    # ✅ 核心：加入只允許「已存在且 active」，不准自動建立
-    if not is_valid_sid(sid) or not session_is_active(sid):
-        emit("error_msg", {"msg": "查無此訂單代碼或已過期，請確認後再加入"})
-        return
+    sid = str((data.get("sessionId") or "")).strip()
+    name = str((data.get("nickname") or "訪客")).strip()[:12] or "訪客"
+    ensure_session(sid)
 
     join_room(sid)
-    users_in_room.setdefault(sid, {})[request.sid] = {
-        "sid": request.sid,
-        "nickname": name,
-    }
+    users_in_room.setdefault(sid, {})[request.sid] = {"sid": request.sid, "nickname": name}
     broadcast_state(sid)
 
+@socketio.on("set_nickname")
+def on_set_nickname(data):
+    sid = str((data.get("sessionId") or "")).strip()
+    name = str((data.get("nickname") or "訪客")).strip()[:12] or "訪客"
+    if not sid:
+        return
+    if sid in users_in_room and request.sid in users_in_room[sid]:
+        users_in_room[sid][request.sid]["nickname"] = name
+    broadcast_state(sid)
+
+@socketio.on("lock_line")
+def on_lock_line(data):
+    sid = str((data.get("sessionId") or "")).strip()
+    line_id = str((data.get("lineId") or "")).strip()
+    name = str((data.get("nickname") or "訪客")).strip()[:12] or "訪客"
+    if not sid or not line_id:
+        return
+
+    locks_in_room.setdefault(sid, {})
+    cur = locks_in_room[sid].get(line_id)
+
+    if cur and cur.get("bySid") != request.sid:
+        emit("lock_denied", {"lineId": line_id, "byName": cur.get("byName", "別人")})
+        return
+
+    locks_in_room[sid][line_id] = {"bySid": request.sid, "byName": name, "ts": int(time.time())}
+    socketio.emit("lock_update", {"lineId": line_id, "byName": name}, room=sid)
+    broadcast_state(sid)
+
+@socketio.on("unlock_line")
+def on_unlock_line(data):
+    sid = str((data.get("sessionId") or "")).strip()
+    line_id = str((data.get("lineId") or "")).strip()
+    if not sid or not line_id:
+        return
+
+    cur = (locks_in_room.get(sid, {}) or {}).get(line_id)
+    if not cur:
+        return
+    if cur.get("bySid") != request.sid:
+        return
+
+    del locks_in_room[sid][line_id]
+    socketio.emit("lock_remove", {"lineId": line_id}, room=sid)
+    broadcast_state(sid)
 
 @socketio.on("cart_add")
 def on_cart_add(data):
-    data = data or {}
-    sid = str(data.get("sessionId", "")).strip()
-
-    if not require_active_session_or_reject(sid, reason="訂單代碼不存在或已過期，無法加入購物車"):
-        return
-
+    sid = str((data.get("sessionId") or "")).strip()
+    ensure_session(sid)
     cart = get_session_cart(sid)
-    cart.append(data.get("item", {}))
+    cart.append(data.get("item", {}) or {})
     save_session_cart(sid, cart)
     broadcast_state(sid)
 
+@socketio.on("cart_set_qty")
+def on_cart_set_qty(data):
+    sid = str((data.get("sessionId") or "")).strip()
+    line_id = str((data.get("lineId") or "")).strip()
+    qty = int(data.get("qty") or 1)
+    qty = max(1, qty)
+
+    if not sid or not line_id:
+        return
+
+    # 若被別人鎖住就拒絕
+    cur = (locks_in_room.get(sid, {}) or {}).get(line_id)
+    if cur and cur.get("bySid") != request.sid:
+        emit("op_rejected", {"reason": f"被 {cur.get('byName','別人')} 鎖定中"})
+        return
+
+    ensure_session(sid)
+    cart = get_session_cart(sid)
+    idx = _find_item_idx(cart, line_id)
+    if idx < 0:
+        emit("op_rejected", {"reason": "找不到項目"})
+        return
+
+    cart[idx]["qty"] = qty
+    save_session_cart(sid, cart)
+    broadcast_state(sid)
+
+@socketio.on("cart_set_remark")
+def on_cart_set_remark(data):
+    sid = str((data.get("sessionId") or "")).strip()
+    line_id = str((data.get("lineId") or "")).strip()
+    remark = str((data.get("remark") or "")).strip()
+
+    if not sid or not line_id:
+        return
+
+    cur = (locks_in_room.get(sid, {}) or {}).get(line_id)
+    if cur and cur.get("bySid") != request.sid:
+        emit("op_rejected", {"reason": f"被 {cur.get('byName','別人')} 鎖定中"})
+        return
+
+    ensure_session(sid)
+    cart = get_session_cart(sid)
+    idx = _find_item_idx(cart, line_id)
+    if idx < 0:
+        emit("op_rejected", {"reason": "找不到項目"})
+        return
+
+    cart[idx]["remark"] = remark
+    save_session_cart(sid, cart)
+    broadcast_state(sid)
+
+@socketio.on("cart_remove")
+def on_cart_remove(data):
+    sid = str((data.get("sessionId") or "")).strip()
+    line_id = str((data.get("lineId") or "")).strip()
+    if not sid or not line_id:
+        return
+
+    cur = (locks_in_room.get(sid, {}) or {}).get(line_id)
+    if cur and cur.get("bySid") != request.sid:
+        emit("op_rejected", {"reason": f"被 {cur.get('byName','別人')} 鎖定中"})
+        return
+
+    ensure_session(sid)
+    cart = get_session_cart(sid)
+    idx = _find_item_idx(cart, line_id)
+    if idx < 0:
+        emit("op_rejected", {"reason": "找不到項目"})
+        return
+
+    cart.pop(idx)
+
+    # 同步移除鎖
+    if sid in locks_in_room and line_id in locks_in_room[sid]:
+        del locks_in_room[sid][line_id]
+        socketio.emit("lock_remove", {"lineId": line_id}, room=sid)
+
+    save_session_cart(sid, cart)
+    broadcast_state(sid)
+
+@socketio.on("order_detail")
+def on_order_detail(data):
+    sid = str((data.get("sessionId") or "")).strip()
+    o = load_order_by_session(sid)
+    emit("order_detail_result", {"ok": True, "exists": bool(o), "order": o})
 
 @socketio.on("submit_cart_as_order")
 def on_submit(data):
-    data = data or {}
-    sid = str(data.get("sessionId", "")).strip()
+    sid = str((data.get("sessionId") or "")).strip()
     table = data.get("table", "")
-
-    if not require_active_session_or_reject(sid, reason="訂單代碼不存在或已過期，無法送出訂單"):
-        return
-
     cart = get_session_cart(sid)
+
     oid = append_items_to_order(sid, table, cart)
+
     save_session_cart(sid, [])
+    locks_in_room[sid] = {}
+
     emit("submit_result", {"ok": True, "orderId": oid}, room=sid)
-    emit(
+    socketio.emit(
         "order_detail_result",
         {"ok": True, "exists": True, "order": load_order_by_session(sid)},
         room=sid,
     )
     broadcast_state(sid)
 
-
-# ✅ 補：前端會用到的 order_detail（不會建立 session，只回最新訂單）
-@socketio.on("order_detail")
-def on_order_detail(data):
-    data = data or {}
-    sid = str(data.get("sessionId", "")).strip()
-
-    if not is_valid_sid(sid):
-        emit("order_detail_result", {"ok": False, "msg": "invalid sessionId"})
-        return
-
-    o = load_order_by_session(sid)
-    emit("order_detail_result", {"ok": True, "exists": bool(o), "order": o})
-
+@socketio.on("disconnect")
+def on_disconnect():
+    # 移除使用者 & 釋放他鎖的項目
+    for sid, mp in list(users_in_room.items()):
+        if request.sid in mp:
+            del mp[request.sid]
+            # 釋放鎖
+            d = locks_in_room.get(sid, {}) or {}
+            to_remove = [lineId for lineId, v in d.items() if v.get("bySid") == request.sid]
+            for lineId in to_remove:
+                del d[lineId]
+                socketio.emit("lock_remove", {"lineId": lineId}, room=sid)
+            broadcast_state(sid)
 
 # ================== REST ==================
 @app.route("/orders", methods=["GET"])
 def list_orders():
-    """
-    列出最近的訂單列表（給員工端 / 管理端用）
-    GET /orders?limit=200
-    """
     try:
         limit = int(request.args.get("limit", "200"))
     except ValueError:
         limit = 200
-
     orders = load_all_orders(limit)
     return jsonify({"ok": True, "count": len(orders), "orders": orders})
 
-
-# ✅ 新增：給你 App 新版相容 /api/orders
 @app.route("/api/orders", methods=["GET"])
 def list_orders_api():
     try:
         limit = int(request.args.get("limit", "200"))
     except ValueError:
         limit = 200
-
     orders = load_all_orders(limit)
     return jsonify({"ok": True, "orders": orders})
 
-
 @app.route("/orders/<int:oid>/status", methods=["POST"])
 def update_order_status(oid):
-    """
-    更新單一訂單狀態：new / making / done / cancelled
-    POST /orders/123/status
-    JSON: { "status": "making" }
-    """
     data = request.get_json(silent=True) or {}
     status = str(data.get("status", "")).strip().lower()
 
@@ -585,7 +578,6 @@ def update_order_status(oid):
         if c.rowcount == 0:
             return jsonify({"ok": False, "msg": "order not found"}), 404
 
-    # ✅ 精準叫號：只要狀態改 done，就自動把該筆的四碼 session_id 寫入 call_state
     if status == "done":
         sid = get_session_id_by_order_id(oid)
         if sid:
@@ -593,49 +585,41 @@ def update_order_status(oid):
 
     return jsonify({"ok": True})
 
-
-# ✅ 新增：給你 App 新版相容 /api/orders/<id>/status
 @app.route("/api/orders/<int:oid>/status", methods=["POST"])
 def update_order_status_api(oid):
     return update_order_status(oid)
-
 
 @app.route("/session/new", methods=["POST"])
 def new_session():
     sid = create_unique_session_id()
     return jsonify({"ok": True, "sessionId": sid})
 
-
-# ✅ 新增：前端可先查代碼是否存在（且 active）
-@app.route("/session/exists/<sid>", methods=["GET"])
-def session_exists_api(sid):
-    sid = str(sid or "").strip()
-    if not is_valid_sid(sid):
-        return jsonify({"ok": True, "exists": False})
-    return jsonify({"ok": True, "exists": bool(session_is_active(sid))})
-
-
-@app.route("/order_detail/<sid>")
-def order_detail(sid):
-    o = load_order_by_session(sid)
-    return jsonify({"ok": True, "exists": bool(o), "order": o})
-
-
-# ✅ 補相容：你前端有用 /order_by_session/<sid>
-@app.route("/order_by_session/<sid>")
+# 你前端有用 /order_by_session/<sid>，這裡做相容（等同 order_detail）
+@app.route("/order_by_session/<sid>", methods=["GET"])
 def order_by_session(sid):
     o = load_order_by_session(sid)
     return jsonify({"ok": True, "exists": bool(o), "order": o})
 
+# 原本就有的 order_detail
+@app.route("/order_detail/<sid>", methods=["GET"])
+def order_detail(sid):
+    o = load_order_by_session(sid)
+    return jsonify({"ok": True, "exists": bool(o), "order": o})
+
+# 你前端有抓 soldout
+@app.route("/soldout", methods=["GET"])
+def soldout_get():
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("SELECT category_idx, item_idx FROM soldout")
+        rows = c.fetchall()
+    items = [[int(a), int(b)] for a, b in rows]
+    return jsonify({"ok": True, "items": items})
 
 @app.route("/health")
 def health():
     return jsonify({"ok": True})
 
-
-# ✅ 新增：叫號 API（網站讀取/（可選）App 手動指定）
-# GET  /api/call -> { ok:true, code:"1234", updatedAt: 1700000000 }
-# POST /api/call { "code":"1234" } -> { ok:true }
 @app.route("/api/call", methods=["GET", "POST"])
 def api_call():
     if request.method == "GET":
@@ -645,13 +629,11 @@ def api_call():
     data = request.get_json(silent=True) or {}
     code = str(data.get("code", "")).strip()
 
-    # 你要四碼數字就開這個（建議開）
     if not (len(code) == 4 and code.isdigit()):
         return jsonify({"ok": False, "msg": "code 必須是 4 碼數字"}), 400
 
     set_call_code(code)
     return jsonify({"ok": True})
-
 
 # ================== Run ==================
 if __name__ == "__main__":
