@@ -23,7 +23,7 @@ app = Flask(__name__)
 ALLOWED_ORIGINS = [
     "https://partnerburger.netlify.app",
     "https://illustrious-centaur-327b59.netlify.app",
-    "https://silly-marzipan-9f27a5.netlify.app", 
+    "https://silly-marzipan-9f27a5.netlify.app",
 ]
 
 CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}})
@@ -121,6 +121,11 @@ def to_ts_ms(s):
         return int(time.time() * 1000)
 
 
+def is_valid_sid(sid: str) -> bool:
+    sid = str(sid or "").strip()
+    return (len(sid) == 4 and sid.isdigit())
+
+
 def normalize_cart_item(item: dict) -> dict:
     return {
         "lineId": item.get("lineId") or uuid.uuid4().hex,
@@ -167,7 +172,6 @@ def set_call_code(code: str):
         c = conn.cursor()
         c.execute("UPDATE call_state SET code=?, updated_at=? WHERE id=1", (code, now_ts))
         conn.commit()
-    # 可選：推播給 Socket 客戶端（如果你未來要用）
     socketio.emit("call_update", {"ok": True, "code": code, "updatedAt": now_ts})
     return True
 
@@ -182,6 +186,9 @@ def get_session_id_by_order_id(oid: int):
 
 # ================== Session ==================
 def session_is_active(session_id):
+    if not is_valid_sid(session_id):
+        return False
+
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("SELECT expires_at FROM sessions WHERE session_id=?", (session_id,))
@@ -199,8 +206,20 @@ def session_is_active(session_id):
         return False
 
 
+def session_exists(session_id) -> bool:
+    """只檢查資料列是否存在（不管過期與否）"""
+    if not is_valid_sid(session_id):
+        return False
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("SELECT 1 FROM sessions WHERE session_id=? LIMIT 1", (session_id,))
+        return c.fetchone() is not None
+
+
 def ensure_session(session_id, force_reset=False):
     if not session_id:
+        return
+    if not is_valid_sid(session_id):
         return
 
     with get_conn() as conn:
@@ -251,6 +270,8 @@ def create_unique_session_id():
 
 
 def get_session_cart(session_id):
+    if not is_valid_sid(session_id):
+        return []
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("SELECT cart_json FROM sessions WHERE session_id=?", (session_id,))
@@ -265,6 +286,8 @@ def get_session_cart(session_id):
 
 
 def save_session_cart(session_id, cart):
+    if not is_valid_sid(session_id):
+        return
     cart = [normalize_cart_item(x) for x in cart or []]
     with get_conn() as conn:
         c = conn.cursor()
@@ -287,8 +310,20 @@ def save_session_cart(session_id, cart):
         conn.commit()
 
 
+def require_active_session_or_reject(sid: str, room: str = None, reason: str = "查無此訂單代碼或已過期"):
+    """Socket 用：不存在/過期就拒絕，避免自動開單。"""
+    if not is_valid_sid(sid) or not session_is_active(sid):
+        # 前端有接 op_rejected
+        emit("op_rejected", {"reason": reason}, room=room)
+        return False
+    return True
+
+
 # ================== Orders ==================
 def load_order_by_session(session_id):
+    if not is_valid_sid(session_id):
+        return None
+
     with get_conn() as conn:
         c = conn.cursor()
         c.execute(
@@ -397,6 +432,7 @@ def append_items_to_order(session_id, table, new_items):
 # ================== Socket ==================
 users_in_room = {}
 
+
 def broadcast_state(session_id):
     socketio.emit(
         "session_state",
@@ -410,6 +446,20 @@ def broadcast_state(session_id):
     )
 
 
+@socketio.on("disconnect")
+def on_disconnect():
+    # 清掉 users_in_room 裡這個 socket
+    for sid, members in list(users_in_room.items()):
+        if request.sid in members:
+            del members[request.sid]
+            if not members:
+                users_in_room.pop(sid, None)
+            else:
+                # 有人在房內才廣播更新
+                broadcast_state(sid)
+            break
+
+
 @socketio.on("create_session")
 def on_create_session(_):
     try:
@@ -421,9 +471,15 @@ def on_create_session(_):
 
 @socketio.on("join_session")
 def on_join(data):
-    sid = data.get("sessionId")
-    name = data.get("nickname", "訪客")
-    ensure_session(sid)
+    data = data or {}
+    sid = str(data.get("sessionId", "")).strip()
+    name = str(data.get("nickname", "訪客")).strip()[:12] or "訪客"
+
+    # ✅ 核心：加入只允許「已存在且 active」，不准自動建立
+    if not is_valid_sid(sid) or not session_is_active(sid):
+        emit("error_msg", {"msg": "查無此訂單代碼或已過期，請確認後再加入"})
+        return
+
     join_room(sid)
     users_in_room.setdefault(sid, {})[request.sid] = {
         "sid": request.sid,
@@ -434,8 +490,12 @@ def on_join(data):
 
 @socketio.on("cart_add")
 def on_cart_add(data):
-    sid = data.get("sessionId")
-    ensure_session(sid)
+    data = data or {}
+    sid = str(data.get("sessionId", "")).strip()
+
+    if not require_active_session_or_reject(sid, reason="訂單代碼不存在或已過期，無法加入購物車"):
+        return
+
     cart = get_session_cart(sid)
     cart.append(data.get("item", {}))
     save_session_cart(sid, cart)
@@ -444,8 +504,13 @@ def on_cart_add(data):
 
 @socketio.on("submit_cart_as_order")
 def on_submit(data):
-    sid = data.get("sessionId")
+    data = data or {}
+    sid = str(data.get("sessionId", "")).strip()
     table = data.get("table", "")
+
+    if not require_active_session_or_reject(sid, reason="訂單代碼不存在或已過期，無法送出訂單"):
+        return
+
     cart = get_session_cart(sid)
     oid = append_items_to_order(sid, table, cart)
     save_session_cart(sid, [])
@@ -456,6 +521,20 @@ def on_submit(data):
         room=sid,
     )
     broadcast_state(sid)
+
+
+# ✅ 補：前端會用到的 order_detail（不會建立 session，只回最新訂單）
+@socketio.on("order_detail")
+def on_order_detail(data):
+    data = data or {}
+    sid = str(data.get("sessionId", "")).strip()
+
+    if not is_valid_sid(sid):
+        emit("order_detail_result", {"ok": False, "msg": "invalid sessionId"})
+        return
+
+    o = load_order_by_session(sid)
+    emit("order_detail_result", {"ok": True, "exists": bool(o), "order": o})
 
 
 # ================== REST ==================
@@ -483,7 +562,6 @@ def list_orders_api():
         limit = 200
 
     orders = load_all_orders(limit)
-    # App 只需要 ok + orders
     return jsonify({"ok": True, "orders": orders})
 
 
@@ -528,8 +606,24 @@ def new_session():
     return jsonify({"ok": True, "sessionId": sid})
 
 
+# ✅ 新增：前端可先查代碼是否存在（且 active）
+@app.route("/session/exists/<sid>", methods=["GET"])
+def session_exists_api(sid):
+    sid = str(sid or "").strip()
+    if not is_valid_sid(sid):
+        return jsonify({"ok": True, "exists": False})
+    return jsonify({"ok": True, "exists": bool(session_is_active(sid))})
+
+
 @app.route("/order_detail/<sid>")
 def order_detail(sid):
+    o = load_order_by_session(sid)
+    return jsonify({"ok": True, "exists": bool(o), "order": o})
+
+
+# ✅ 補相容：你前端有用 /order_by_session/<sid>
+@app.route("/order_by_session/<sid>")
+def order_by_session(sid):
     o = load_order_by_session(sid)
     return jsonify({"ok": True, "exists": bool(o), "order": o})
 
