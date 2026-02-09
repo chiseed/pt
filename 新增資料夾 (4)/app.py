@@ -23,6 +23,7 @@ app = Flask(__name__)
 ALLOWED_ORIGINS = [
     "https://partnerburger.netlify.app",
     "https://illustrious-centaur-327b59.netlify.app",
+    "https://silly-marzipan-9f27a5.netlify.app", 
 ]
 
 CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}})
