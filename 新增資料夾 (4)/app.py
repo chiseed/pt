@@ -14,7 +14,7 @@ TZ = ZoneInfo("Asia/Taipei")
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from flask_socketio import SocketIO, join_room, leave_room, emit
+from flask_socketio import SocketIO, join_room, emit
 
 # ================== App ==================
 app = Flask(__name__)
@@ -82,6 +82,15 @@ def init_db():
             PRIMARY KEY (category_idx, item_idx)
         )""")
 
+        # ✅ 新增：目前叫號狀態（精準叫號用）
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS call_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            code TEXT DEFAULT '',
+            updated_at INTEGER DEFAULT 0
+        )""")
+        c.execute("INSERT OR IGNORE INTO call_state (id, code, updated_at) VALUES (1, '', 0)")
+
         conn.commit()
 
 
@@ -137,6 +146,37 @@ def calc_total(cart):
         )
         total += (int(it.get("price", 0)) + add) * int(it.get("qty", 1))
     return total
+
+
+# ================== Call State (精準叫號) ==================
+def get_call_state():
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("SELECT code, updated_at FROM call_state WHERE id=1")
+        row = c.fetchone()
+    if not row:
+        return {"code": "", "updated_at": 0}
+    return {"code": row[0] or "", "updated_at": int(row[1] or 0)}
+
+
+def set_call_code(code: str):
+    code = (code or "").strip()
+    now_ts = int(time.time())
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("UPDATE call_state SET code=?, updated_at=? WHERE id=1", (code, now_ts))
+        conn.commit()
+    # 可選：推播給 Socket 客戶端（如果你未來要用）
+    socketio.emit("call_update", {"ok": True, "code": code, "updatedAt": now_ts})
+    return True
+
+
+def get_session_id_by_order_id(oid: int):
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("SELECT session_id FROM orders WHERE id=?", (oid,))
+        row = c.fetchone()
+    return row[0] if row else None
 
 
 # ================== Session ==================
@@ -355,9 +395,6 @@ def append_items_to_order(session_id, table, new_items):
 
 # ================== Socket ==================
 users_in_room = {}
-locks = {}
-LOCK_TTL_MS = 12000
-
 
 def broadcast_state(session_id):
     socketio.emit(
@@ -367,7 +404,6 @@ def broadcast_state(session_id):
             "cart": get_session_cart(session_id),
             "total": calc_total(get_session_cart(session_id)),
             "users": list(users_in_room.get(session_id, {}).values()),
-            "locks": locks.get(session_id, {}),
         },
         room=session_id,
     )
@@ -437,6 +473,19 @@ def list_orders():
     return jsonify({"ok": True, "count": len(orders), "orders": orders})
 
 
+# ✅ 新增：給你 App 新版相容 /api/orders
+@app.route("/api/orders", methods=["GET"])
+def list_orders_api():
+    try:
+        limit = int(request.args.get("limit", "200"))
+    except ValueError:
+        limit = 200
+
+    orders = load_all_orders(limit)
+    # App 只需要 ok + orders
+    return jsonify({"ok": True, "orders": orders})
+
+
 @app.route("/orders/<int:oid>/status", methods=["POST"])
 def update_order_status(oid):
     """
@@ -457,7 +506,19 @@ def update_order_status(oid):
         if c.rowcount == 0:
             return jsonify({"ok": False, "msg": "order not found"}), 404
 
+    # ✅ 精準叫號：只要狀態改 done，就自動把該筆的四碼 session_id 寫入 call_state
+    if status == "done":
+        sid = get_session_id_by_order_id(oid)
+        if sid:
+            set_call_code(str(sid))
+
     return jsonify({"ok": True})
+
+
+# ✅ 新增：給你 App 新版相容 /api/orders/<id>/status
+@app.route("/api/orders/<int:oid>/status", methods=["POST"])
+def update_order_status_api(oid):
+    return update_order_status(oid)
 
 
 @app.route("/session/new", methods=["POST"])
@@ -474,6 +535,26 @@ def order_detail(sid):
 
 @app.route("/health")
 def health():
+    return jsonify({"ok": True})
+
+
+# ✅ 新增：叫號 API（網站讀取/（可選）App 手動指定）
+# GET  /api/call -> { ok:true, code:"1234", updatedAt: 1700000000 }
+# POST /api/call { "code":"1234" } -> { ok:true }
+@app.route("/api/call", methods=["GET", "POST"])
+def api_call():
+    if request.method == "GET":
+        st = get_call_state()
+        return jsonify({"ok": True, "code": st["code"], "updatedAt": st["updated_at"]})
+
+    data = request.get_json(silent=True) or {}
+    code = str(data.get("code", "")).strip()
+
+    # 你要四碼數字就開這個（建議開）
+    if not (len(code) == 4 and code.isdigit()):
+        return jsonify({"ok": False, "msg": "code 必須是 4 碼數字"}), 400
+
+    set_call_code(code)
     return jsonify({"ok": True})
 
 
