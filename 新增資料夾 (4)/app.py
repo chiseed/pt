@@ -98,7 +98,9 @@ def now_str():
 
 
 def expires_str():
-    return (now_dt() + datetime.timedelta(seconds=SESSION_TTL_SECONDS)).strftime("%Y-%m-%d %H:%M:%S")
+    return (now_dt() + datetime.timedelta(seconds=SESSION_TTL_SECONDS)).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
 
 
 def to_ts_ms(s):
@@ -120,15 +122,19 @@ def normalize_cart_item(item: dict) -> dict:
         "temp": item.get("temp"),
         "addOns": item.get("addOns", []),
         "addedBy": str(item.get("addedBy", "")).strip()[:20] or None,
-        "category": item.get("category") 
-        
+        # 前端如果有帶分類，就會被存起來（吃堡/單點/飲品/甜點）
+        "category": item.get("category"),
     }
 
 
 def calc_total(cart):
     total = 0
     for it in cart or []:
-        add = sum(int(a.get("price", 0)) for a in it.get("addOns", []) if isinstance(a, dict))
+        add = sum(
+            int(a.get("price", 0))
+            for a in it.get("addOns", [])
+            if isinstance(a, dict)
+        )
         total += (int(it.get("price", 0)) + add) * int(it.get("qty", 1))
     return total
 
@@ -144,7 +150,9 @@ def session_is_active(session_id):
         return False
 
     try:
-        exp = datetime.datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ)
+        exp = datetime.datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=TZ
+        )
         return now_dt() < exp
     except Exception:
         return False
@@ -160,27 +168,35 @@ def ensure_session(session_id, force_reset=False):
         row = c.fetchone()
 
         if not row:
-            c.execute("""
+            c.execute(
+                """
                 INSERT INTO sessions (session_id, cart_json, created_at, expires_at, updated_at)
                 VALUES (?, ?, ?, ?, ?)
-            """, (session_id, "[]", now_str(), expires_str(), now_str()))
+            """,
+                (session_id, "[]", now_str(), expires_str(), now_str()),
+            )
             conn.commit()
             return
 
         expired = False
         if row[0]:
             try:
-                exp = datetime.datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ)
+                exp = datetime.datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").replace(
+                    tzinfo=TZ
+                )
                 expired = now_dt() >= exp
             except Exception:
                 expired = False
 
         if expired or force_reset:
-            c.execute("""
+            c.execute(
+                """
                 UPDATE sessions
                 SET cart_json=?, created_at=?, expires_at=?, updated_at=?
                 WHERE session_id=?
-            """, ("[]", now_str(), expires_str(), now_str(), session_id))
+            """,
+                ("[]", now_str(), expires_str(), now_str(), session_id),
+            )
             conn.commit()
 
 
@@ -211,13 +227,22 @@ def save_session_cart(session_id, cart):
     cart = [normalize_cart_item(x) for x in cart or []]
     with get_conn() as conn:
         c = conn.cursor()
-        c.execute("""
+        c.execute(
+            """
             INSERT INTO sessions (session_id, cart_json, created_at, expires_at, updated_at)
             VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 cart_json=excluded.cart_json,
                 updated_at=excluded.updated_at
-        """, (session_id, json.dumps(cart, ensure_ascii=False), now_str(), expires_str(), now_str()))
+        """,
+            (
+                session_id,
+                json.dumps(cart, ensure_ascii=False),
+                now_str(),
+                expires_str(),
+                now_str(),
+            ),
+        )
         conn.commit()
 
 
@@ -225,12 +250,15 @@ def save_session_cart(session_id, cart):
 def load_order_by_session(session_id):
     with get_conn() as conn:
         c = conn.cursor()
-        c.execute("""
+        c.execute(
+            """
             SELECT id, table_num, time, items, status
             FROM orders
             WHERE session_id=?
             ORDER BY id DESC LIMIT 1
-        """, (session_id,))
+        """,
+            (session_id,),
+        )
         row = c.fetchone()
 
     if not row:
@@ -247,7 +275,7 @@ def load_order_by_session(session_id):
         "status": status,
         "items": items,
         "total": calc_total(items),
-        "timestamp": to_ts_ms(t)
+        "timestamp": to_ts_ms(t),
     }
 
 
@@ -256,27 +284,32 @@ def load_all_orders(limit=200):
 
     with get_conn() as conn:
         c = conn.cursor()
-        c.execute("""
+        c.execute(
+            """
             SELECT id, session_id, table_num, time, items, status
             FROM orders
             ORDER BY id DESC
             LIMIT ?
-        """, (limit,))
+        """,
+            (limit,),
+        )
         rows = c.fetchall()
 
     orders = []
     for oid, sid, table, t, items, status in rows:
         items_list = json.loads(items) if items else []
-        orders.append({
-            "id": oid,
-            "sessionId": sid,
-            "tableNo": table,
-            "time": t,
-            "status": status,
-            "items": items_list,
-            "total": calc_total(items_list),
-            "timestamp": to_ts_ms(t)
-        })
+        orders.append(
+            {
+                "id": oid,
+                "sessionId": sid,
+                "tableNo": table,
+                "time": t,
+                "status": status,
+                "items": items_list,
+                "total": calc_total(items_list),
+                "timestamp": to_ts_ms(t),
+            }
+        )
     return orders
 
 
@@ -287,26 +320,35 @@ def append_items_to_order(session_id, table, new_items):
 
     with get_conn() as conn:
         c = conn.cursor()
-        c.execute("""
+        c.execute(
+            """
             SELECT id, items FROM orders
             WHERE session_id=?
             ORDER BY id DESC LIMIT 1
-        """, (session_id,))
+        """,
+            (session_id,),
+        )
         row = c.fetchone()
 
         if not row:
-            c.execute("""
+            c.execute(
+                """
                 INSERT INTO orders (session_id, table_num, time, items)
                 VALUES (?, ?, ?, ?)
-            """, (session_id, table, now_str(), json.dumps(new_items, ensure_ascii=False)))
+            """,
+                (session_id, table, now_str(), json.dumps(new_items, ensure_ascii=False)),
+            )
             conn.commit()
             return c.lastrowid
 
         oid, old = row
         merged = json.loads(old or "[]") + new_items
-        c.execute("""
+        c.execute(
+            """
             UPDATE orders SET items=?, table_num=? WHERE id=?
-        """, (json.dumps(merged, ensure_ascii=False), table, oid))
+        """,
+            (json.dumps(merged, ensure_ascii=False), table, oid),
+        )
         conn.commit()
         return oid
 
@@ -318,13 +360,17 @@ LOCK_TTL_MS = 12000
 
 
 def broadcast_state(session_id):
-    socketio.emit("session_state", {
-        "sessionId": session_id,
-        "cart": get_session_cart(session_id),
-        "total": calc_total(get_session_cart(session_id)),
-        "users": list(users_in_room.get(session_id, {}).values()),
-        "locks": locks.get(session_id, {})
-    }, room=session_id)
+    socketio.emit(
+        "session_state",
+        {
+            "sessionId": session_id,
+            "cart": get_session_cart(session_id),
+            "total": calc_total(get_session_cart(session_id)),
+            "users": list(users_in_room.get(session_id, {}).values()),
+            "locks": locks.get(session_id, {}),
+        },
+        room=session_id,
+    )
 
 
 @socketio.on("create_session")
@@ -342,7 +388,10 @@ def on_join(data):
     name = data.get("nickname", "訪客")
     ensure_session(sid)
     join_room(sid)
-    users_in_room.setdefault(sid, {})[request.sid] = {"sid": request.sid, "nickname": name}
+    users_in_room.setdefault(sid, {})[request.sid] = {
+        "sid": request.sid,
+        "nickname": name,
+    }
     broadcast_state(sid)
 
 
@@ -364,14 +413,21 @@ def on_submit(data):
     oid = append_items_to_order(sid, table, cart)
     save_session_cart(sid, [])
     emit("submit_result", {"ok": True, "orderId": oid}, room=sid)
-    emit("order_detail_result", {"ok": True, "exists": True, "order": load_order_by_session(sid)}, room=sid)
+    emit(
+        "order_detail_result",
+        {"ok": True, "exists": True, "order": load_order_by_session(sid)},
+        room=sid,
+    )
     broadcast_state(sid)
 
 
 # ================== REST ==================
-@app.route("/api/orders", methods=["GET"])
-def api_orders():
-    """列出最近的訂單列表（給員工端 / 管理端用）"""
+@app.route("/orders", methods=["GET"])
+def list_orders():
+    """
+    列出最近的訂單列表（給員工端 / 管理端用）
+    GET /orders?limit=200
+    """
     try:
         limit = int(request.args.get("limit", "200"))
     except ValueError:
@@ -381,9 +437,13 @@ def api_orders():
     return jsonify({"ok": True, "count": len(orders), "orders": orders})
 
 
-@app.route("/api/orders/<int:oid>/status", methods=["POST"])
-def api_update_order_status(oid):
-    """更新單一訂單狀態：new / making / done / cancelled"""
+@app.route("/orders/<int:oid>/status", methods=["POST"])
+def update_order_status(oid):
+    """
+    更新單一訂單狀態：new / making / done / cancelled
+    POST /orders/123/status
+    JSON: { "status": "making" }
+    """
     data = request.get_json(silent=True) or {}
     status = str(data.get("status", "")).strip().lower()
 
@@ -421,4 +481,3 @@ def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     socketio.run(app, host="0.0.0.0", port=port)
-
