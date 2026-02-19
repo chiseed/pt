@@ -18,6 +18,7 @@ from flask_socketio import SocketIO, join_room, emit
 
 # ================== App ==================
 app = Flask(__name__)
+ADMIN_PIN = (os.environ.get("ADMIN_PIN") or "").strip()
 
 ALLOWED_ORIGINS = [
     "https://partnerburger.netlify.app",
@@ -28,14 +29,11 @@ ALLOWED_ORIGINS = [
 # ✅ CORS：允許自訂 header X-Admin-Pin（管理頁要用）
 CORS(
     app,
-    resources={
-        r"/*": {
-            "origins": ALLOWED_ORIGINS,
-            "allow_headers": ["Content-Type", "X-Admin-Pin"],
-            "methods": ["GET", "POST", "PUT", "OPTIONS"],
-        }
-    },
+    resources={r"/*": {"origins": ALLOWED_ORIGINS}},
+    allow_headers=["Content-Type", "X-Admin-Pin"],
+    methods=["GET", "POST", "PUT", "OPTIONS"],
 )
+
 
 socketio = SocketIO(
     app,
@@ -700,8 +698,14 @@ def order_detail(sid):
 
 
 # ✅ soldout：GET 給前台讀；POST/PUT 給管理頁寫（需要 PIN）
-@app.route("/soldout", methods=["GET", "POST", "PUT"])
+@app.route("/soldout", methods=["GET", "POST", "PUT", "OPTIONS"])
 def soldout_handler():
+
+    # ✅ 先放行預檢（不驗 pin）
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    # ===== GET：給前台讀售完 =====
     if request.method == "GET":
         with get_conn() as conn:
             c = conn.cursor()
@@ -710,8 +714,9 @@ def soldout_handler():
         items = [[int(a), int(b)] for a, b in rows]
         return jsonify({"ok": True, "items": items})
 
+    # ===== POST/PUT：管理頁寫入（需要 PIN）=====
     pin = request.headers.get("X-Admin-Pin", "") or ""
-    if pin != ADMIN_PIN:
+    if not ADMIN_PIN or pin != ADMIN_PIN:
         return jsonify({"ok": False, "msg": "Unauthorized"}), 401
 
     data = request.get_json(silent=True) or {}
@@ -724,8 +729,7 @@ def soldout_handler():
     for x in items:
         if isinstance(x, (list, tuple)) and len(x) == 2:
             try:
-                ci = int(x[0])
-                ii = int(x[1])
+                ci = int(x[0]); ii = int(x[1])
             except Exception:
                 continue
             key = (ci, ii)
@@ -743,11 +747,6 @@ def soldout_handler():
                 [(ci, ii, now_str()) for (ci, ii) in clean]
             )
         conn.commit()
-
-    try:
-        socketio.emit("soldout_updated", {"ok": True, "items": [[ci, ii] for (ci, ii) in clean], "updatedAt": now_str()})
-    except Exception:
-        pass
 
     return jsonify({"ok": True, "count": len(clean)})
 
@@ -878,5 +877,7 @@ def api_inventory_update(item_id):
 
 # ================== Run ==================
 if __name__ == "__main__":
+    
     port = int(os.environ.get("PORT", 8000))
     socketio.run(app, host="0.0.0.0", port=port)
+
