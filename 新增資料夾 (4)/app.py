@@ -693,21 +693,73 @@ def order_detail(sid):
 
 
 # 你前端有抓 soldout
-@app.route("/soldout", methods=["GET"])
-def soldout_get():
+# 你前端有抓 soldout + 管理頁要寫入 soldout（需要 PIN）
+@app.route("/soldout", methods=["GET", "POST", "PUT"])
+def soldout_handler():
+    # ===== GET：給前台讀售完 =====
+    if request.method == "GET":
+        with get_conn() as conn:
+            c = conn.cursor()
+            c.execute("SELECT category_idx, item_idx FROM soldout")
+            rows = c.fetchall()
+        items = [[int(a), int(b)] for a, b in rows]
+        return jsonify({"ok": True, "items": items})
+
+    # ===== POST/PUT：管理頁寫入（需要 PIN）=====
+    pin = request.headers.get("X-Admin-Pin", "") or ""
+    if pin != ADMIN_PIN:
+        return jsonify({"ok": False, "msg": "Unauthorized"}), 401
+
+    data = request.get_json(silent=True) or {}
+    items = data.get("items", [])
+    if not isinstance(items, list):
+        return jsonify({"ok": False, "msg": "items must be list"}), 400
+
+    # 清洗資料：只收 [[ci, ii], ...]
+    clean = []
+    seen = set()
+    for x in items:
+        if isinstance(x, (list, tuple)) and len(x) == 2:
+            try:
+                ci = int(x[0])
+                ii = int(x[1])
+            except Exception:
+                continue
+            key = (ci, ii)
+            if key in seen:
+                continue
+            seen.add(key)
+            clean.append(key)
+
+    # 這裡採「整批覆蓋」：先刪掉舊的，再寫新的
     with get_conn() as conn:
         c = conn.cursor()
-        c.execute("SELECT category_idx, item_idx FROM soldout")
-        rows = c.fetchall()
-    items = [[int(a), int(b)] for a, b in rows]
-    return jsonify({"ok": True, "items": items})
+        c.execute("DELETE FROM soldout")
+        if clean:
+            c.executemany(
+                "INSERT INTO soldout (category_idx, item_idx, updated_at) VALUES (?, ?, ?)",
+                [(ci, ii, now_str()) for (ci, ii) in clean]
+            )
+        conn.commit()
+
+    # (可選) 通知前端有人更新售完（前台目前是用 fetch，不靠 socket，留著也沒壞處）
+    try:
+        socketio.emit("soldout_updated", {"ok": True, "items": [[ci, ii] for (ci, ii) in clean], "updatedAt": now_str()})
+    except Exception:
+        pass
+
+    return jsonify({"ok": True, "count": len(clean)})
+
 
 
 @app.route("/health")
 def health():
     return jsonify({"ok": True})
 
-
+@app.route("/session/exists/<sid>", methods=["GET"])
+def session_exists(sid):
+    sid = str(sid or "").strip()
+    return jsonify({"ok": True, "exists": bool(sid) and session_is_active(sid)})
 @app.route("/api/call", methods=["GET", "POST"])
 def api_call():
     if request.method == "GET":
@@ -843,3 +895,4 @@ def api_inventory_update(item_id):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     socketio.run(app, host="0.0.0.0", port=port)
+
