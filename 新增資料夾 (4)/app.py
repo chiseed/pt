@@ -25,7 +25,17 @@ ALLOWED_ORIGINS = [
     "https://silly-marzipan-9f27a5.netlify.app",
 ]
 
-CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}})
+# ✅ CORS：允許自訂 header X-Admin-Pin（管理頁要用）
+CORS(
+    app,
+    resources={
+        r"/*": {
+            "origins": ALLOWED_ORIGINS,
+            "allow_headers": ["Content-Type", "X-Admin-Pin"],
+            "methods": ["GET", "POST", "PUT", "OPTIONS"],
+        }
+    },
+)
 
 socketio = SocketIO(
     app,
@@ -38,6 +48,9 @@ socketio = SocketIO(
 DB_FILE = "orders.db"
 SESSION_TTL_SECONDS = 24 * 60 * 60  # 24 小時
 ORDER_STATUS_ALLOWED = {"new", "making", "done", "cancelled"}
+
+# ✅ PIN：Railway 設定環境變數 ADMIN_PIN（沒設就用 2580）
+ADMIN_PIN = os.environ.get("ADMIN_PIN", "2580")
 
 # ================== DB ==================
 def get_conn():
@@ -507,7 +520,6 @@ def on_cart_set_qty(data):
     if not sid or not line_id:
         return
 
-    # 若被別人鎖住就拒絕
     cur = (locks_in_room.get(sid, {}) or {}).get(line_id)
     if cur and cur.get("bySid") != request.sid:
         emit("op_rejected", {"reason": f"被 {cur.get('byName','別人')} 鎖定中"})
@@ -572,7 +584,6 @@ def on_cart_remove(data):
 
     cart.pop(idx)
 
-    # 同步移除鎖
     if sid in locks_in_room and line_id in locks_in_room[sid]:
         del locks_in_room[sid][line_id]
         socketio.emit("lock_remove", {"lineId": line_id}, room=sid)
@@ -610,11 +621,9 @@ def on_submit(data):
 
 @socketio.on("disconnect")
 def on_disconnect():
-    # 移除使用者 & 釋放他鎖的項目
     for sid, mp in list(users_in_room.items()):
         if request.sid in mp:
             del mp[request.sid]
-            # 釋放鎖
             d = locks_in_room.get(sid, {}) or {}
             to_remove = [lineId for lineId, v in d.items() if v.get("bySid") == request.sid]
             for lineId in to_remove:
@@ -678,25 +687,21 @@ def new_session():
     return jsonify({"ok": True, "sessionId": sid})
 
 
-# 你前端有用 /order_by_session/<sid>，這裡做相容（等同 order_detail）
 @app.route("/order_by_session/<sid>", methods=["GET"])
 def order_by_session(sid):
     o = load_order_by_session(sid)
     return jsonify({"ok": True, "exists": bool(o), "order": o})
 
 
-# 原本就有的 order_detail
 @app.route("/order_detail/<sid>", methods=["GET"])
 def order_detail(sid):
     o = load_order_by_session(sid)
     return jsonify({"ok": True, "exists": bool(o), "order": o})
 
 
-# 你前端有抓 soldout
-# 你前端有抓 soldout + 管理頁要寫入 soldout（需要 PIN）
+# ✅ soldout：GET 給前台讀；POST/PUT 給管理頁寫（需要 PIN）
 @app.route("/soldout", methods=["GET", "POST", "PUT"])
 def soldout_handler():
-    # ===== GET：給前台讀售完 =====
     if request.method == "GET":
         with get_conn() as conn:
             c = conn.cursor()
@@ -705,7 +710,6 @@ def soldout_handler():
         items = [[int(a), int(b)] for a, b in rows]
         return jsonify({"ok": True, "items": items})
 
-    # ===== POST/PUT：管理頁寫入（需要 PIN）=====
     pin = request.headers.get("X-Admin-Pin", "") or ""
     if pin != ADMIN_PIN:
         return jsonify({"ok": False, "msg": "Unauthorized"}), 401
@@ -715,7 +719,6 @@ def soldout_handler():
     if not isinstance(items, list):
         return jsonify({"ok": False, "msg": "items must be list"}), 400
 
-    # 清洗資料：只收 [[ci, ii], ...]
     clean = []
     seen = set()
     for x in items:
@@ -731,7 +734,6 @@ def soldout_handler():
             seen.add(key)
             clean.append(key)
 
-    # 這裡採「整批覆蓋」：先刪掉舊的，再寫新的
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("DELETE FROM soldout")
@@ -742,7 +744,6 @@ def soldout_handler():
             )
         conn.commit()
 
-    # (可選) 通知前端有人更新售完（前台目前是用 fetch，不靠 socket，留著也沒壞處）
     try:
         socketio.emit("soldout_updated", {"ok": True, "items": [[ci, ii] for (ci, ii) in clean], "updatedAt": now_str()})
     except Exception:
@@ -751,15 +752,17 @@ def soldout_handler():
     return jsonify({"ok": True, "count": len(clean)})
 
 
-
 @app.route("/health")
 def health():
     return jsonify({"ok": True})
+
 
 @app.route("/session/exists/<sid>", methods=["GET"])
 def session_exists(sid):
     sid = str(sid or "").strip()
     return jsonify({"ok": True, "exists": bool(sid) and session_is_active(sid)})
+
+
 @app.route("/api/call", methods=["GET", "POST"])
 def api_call():
     if request.method == "GET":
@@ -779,9 +782,6 @@ def api_call():
 # ================== REST: 庫存管理（和 soldout 連動） ==================
 @app.route("/api/inventory", methods=["GET"])
 def api_inventory_list():
-    """
-    回傳庫存清單 + 是否售完（依照 soldout 判斷）
-    """
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("""
@@ -818,18 +818,6 @@ def api_inventory_list():
 
 @app.route("/api/inventory/<int:item_id>", methods=["POST"])
 def api_inventory_update(item_id):
-    """
-    更新某一筆庫存：
-    body:
-      {
-        "op": "set" 或 "add",
-        "stock": 數字
-      }
-
-    - op = "set"：直接把庫存設成 stock
-    - op = "add"：在原本庫存上 + stock（可正可負）
-    同時會根據 stock <= 0 / > 0 自動連動 soldout 表
-    """
     data = request.get_json(silent=True) or {}
     op = str(data.get("op", "set")).strip().lower()
 
@@ -842,7 +830,6 @@ def api_inventory_update(item_id):
         c = conn.cursor()
 
         if op == "add":
-            # 累加模式
             c.execute("SELECT stock FROM inventory WHERE id=?", (item_id,))
             row = c.fetchone()
             if not row:
@@ -856,7 +843,6 @@ def api_inventory_update(item_id):
                 WHERE id=?
             """, (new_stock, now_str(), item_id))
 
-            # 重新讀出完整資料給 sync 用
             c.execute("""
                 SELECT id, name, category, category_idx, item_idx, stock, updated_at
                 FROM inventory
@@ -868,7 +854,6 @@ def api_inventory_update(item_id):
             return jsonify({"ok": True, "stock": new_stock})
 
         else:
-            # set 模式：直接設定成某個數字（若 <0 就當 0）
             if stock_val < 0:
                 stock_val = 0
 
@@ -895,4 +880,3 @@ def api_inventory_update(item_id):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     socketio.run(app, host="0.0.0.0", port=port)
-
