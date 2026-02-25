@@ -18,13 +18,15 @@ from flask_socketio import SocketIO, join_room, emit
 
 # ================== App ==================
 app = Flask(__name__)
-ADMIN_PIN = (os.environ.get("ADMIN_PIN") or "").strip()
 
 ALLOWED_ORIGINS = [
     "https://partnerburger.netlify.app",
     "https://illustrious-centaur-327b59.netlify.app",
     "https://silly-marzipan-9f27a5.netlify.app",
 ]
+
+# ✅ PIN：Railway 設定環境變數 ADMIN_PIN（沒設就用 2580）
+ADMIN_PIN = os.environ.get("ADMIN_PIN", "2580").strip()
 
 # ✅ CORS：允許自訂 header X-Admin-Pin（管理頁要用）
 CORS(
@@ -33,7 +35,6 @@ CORS(
     allow_headers=["Content-Type", "X-Admin-Pin"],
     methods=["GET", "POST", "PUT", "OPTIONS"],
 )
-
 
 socketio = SocketIO(
     app,
@@ -46,9 +47,6 @@ socketio = SocketIO(
 DB_FILE = "orders.db"
 SESSION_TTL_SECONDS = 24 * 60 * 60  # 24 小時
 ORDER_STATUS_ALLOWED = {"new", "making", "done", "cancelled"}
-
-# ✅ PIN：Railway 設定環境變數 ADMIN_PIN（沒設就用 2580）
-ADMIN_PIN = os.environ.get("ADMIN_PIN", "2580")
 
 # ================== DB ==================
 def get_conn():
@@ -201,12 +199,10 @@ def sync_soldout_for_inventory_row(cur, row):
 
     _id, name, category, cidx, iidx, stock, updated_at = row
 
-    # 沒有對應到菜單 index 的就略過（前端如果不需要索引可以只用庫存）
     if cidx is None or iidx is None:
         return
 
     if stock <= 0:
-        # 加進 soldout（已存在就只更新時間）
         cur.execute("""
             INSERT INTO soldout (category_idx, item_idx, updated_at)
             VALUES (?, ?, ?)
@@ -214,7 +210,6 @@ def sync_soldout_for_inventory_row(cur, row):
                 updated_at=excluded.updated_at
         """, (cidx, iidx, now_str()))
     else:
-        # 庫存 > 0 就從 soldout 移除
         cur.execute(
             "DELETE FROM soldout WHERE category_idx=? AND item_idx=?",
             (cidx, iidx)
@@ -366,35 +361,30 @@ def load_all_orders(limit=200):
     return orders
 
 
-def append_items_to_order(session_id, table, new_items):
-    new_items = [normalize_cart_item(x) for x in new_items or []]
-    if not new_items:
+def create_order_from_cart(session_id: str, table: str, cart_items: list) -> int:
+    """
+    ✅ 方案B：每次送出都建立一筆新的 orders
+    - session_id 可重複（同代碼會有多張單）
+    - status 一律 new
+    - items 存當下 cart 的快照
+    """
+    items = [normalize_cart_item(x) for x in (cart_items or [])]
+    if not items:
         return None
 
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("""
-            SELECT id, items FROM orders
-            WHERE session_id=?
-            ORDER BY id DESC LIMIT 1
-        """, (session_id,))
-        row = c.fetchone()
-
-        if not row:
-            c.execute("""
-                INSERT INTO orders (session_id, table_num, time, items)
-                VALUES (?, ?, ?, ?)
-            """, (session_id, table, now_str(), json.dumps(new_items, ensure_ascii=False)))
-            conn.commit()
-            return c.lastrowid
-
-        oid, old = row
-        merged = json.loads(old or "[]") + new_items
-        c.execute("""
-            UPDATE orders SET items=?, table_num=? WHERE id=?
-        """, (json.dumps(merged, ensure_ascii=False), table, oid))
+            INSERT INTO orders (session_id, table_num, time, items, status)
+            VALUES (?, ?, ?, ?, 'new')
+        """, (
+            session_id,
+            table or "",
+            now_str(),
+            json.dumps(items, ensure_ascii=False),
+        ))
         conn.commit()
-        return oid
+        return c.lastrowid
 
 
 # ================== Socket State ==================
@@ -597,18 +587,30 @@ def on_order_detail(data):
     emit("order_detail_result", {"ok": True, "exists": bool(o), "order": o})
 
 
+# ✅✅✅ 方案B：每次送出都新增一張新訂單（不再 append 到最後一張）
 @socketio.on("submit_cart_as_order")
 def on_submit(data):
     sid = str((data.get("sessionId") or "")).strip()
-    table = data.get("table", "")
+    table = str(data.get("table", "") or "")
+
+    if not sid:
+        emit("submit_result", {"ok": False, "msg": "missing sessionId"})
+        return
+
+    ensure_session(sid)
     cart = get_session_cart(sid)
 
-    oid = append_items_to_order(sid, table, cart)
+    if not cart:
+        emit("submit_result", {"ok": False, "msg": "cart empty"}, room=sid)
+        return
+
+    oid = create_order_from_cart(sid, table, cart)
 
     save_session_cart(sid, [])
     locks_in_room[sid] = {}
 
     emit("submit_result", {"ok": True, "orderId": oid}, room=sid)
+
     socketio.emit(
         "order_detail_result",
         {"ok": True, "exists": True, "order": load_order_by_session(sid)},
@@ -701,11 +703,9 @@ def order_detail(sid):
 @app.route("/soldout", methods=["GET", "POST", "PUT", "OPTIONS"])
 def soldout_handler():
 
-    # ✅ 先放行預檢（不驗 pin）
     if request.method == "OPTIONS":
         return ("", 204)
 
-    # ===== GET：給前台讀售完 =====
     if request.method == "GET":
         with get_conn() as conn:
             c = conn.cursor()
@@ -714,7 +714,6 @@ def soldout_handler():
         items = [[int(a), int(b)] for a, b in rows]
         return jsonify({"ok": True, "items": items})
 
-    # ===== POST/PUT：管理頁寫入（需要 PIN）=====
     pin = request.headers.get("X-Admin-Pin", "") or ""
     if not ADMIN_PIN or pin != ADMIN_PIN:
         return jsonify({"ok": False, "msg": "Unauthorized"}), 401
@@ -877,7 +876,5 @@ def api_inventory_update(item_id):
 
 # ================== Run ==================
 if __name__ == "__main__":
-    
     port = int(os.environ.get("PORT", 8000))
     socketio.run(app, host="0.0.0.0", port=port)
-
