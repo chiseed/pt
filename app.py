@@ -25,10 +25,8 @@ ALLOWED_ORIGINS = [
     "https://silly-marzipan-9f27a5.netlify.app",
 ]
 
-# ✅ PIN：Railway 設定環境變數 ADMIN_PIN（沒設就用 2580）
 ADMIN_PIN = os.environ.get("ADMIN_PIN", "2580").strip()
 
-# ✅ CORS：允許自訂 header X-Admin-Pin（管理頁要用）
 CORS(
     app,
     resources={r"/*": {"origins": ALLOWED_ORIGINS}},
@@ -96,7 +94,6 @@ def init_db():
         )""")
         c.execute("INSERT OR IGNORE INTO call_state (id, code, updated_at) VALUES (1, '', 0)")
 
-        # ✅ 新增庫存表（和 soldout 連動）
         c.execute("""
         CREATE TABLE IF NOT EXISTS inventory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -146,6 +143,9 @@ def normalize_cart_item(item: dict) -> dict:
         "addOns": item.get("addOns", []),
         "addedBy": str(item.get("addedBy", "")).strip()[:20] or None,
         "category": item.get("category"),
+        # 下面兩個欄位給「加點分張」用（不影響舊前端/舊App）
+        "batch": int(item.get("batch", 0) or 0),
+        "submittedAt": item.get("submittedAt") or None,
     }
 
 
@@ -189,16 +189,10 @@ def get_session_id_by_order_id(oid: int):
 
 # ================== Inventory / Soldout 連動 ==================
 def sync_soldout_for_inventory_row(cur, row):
-    """
-    根據 inventory 的一筆資料，同步 soldout：
-    - stock <= 0 → 加入 soldout
-    - stock > 0  → 從 soldout 移除
-    """
     if not row:
         return
 
     _id, name, category, cidx, iidx, stock, updated_at = row
-
     if cidx is None or iidx is None:
         return
 
@@ -210,10 +204,7 @@ def sync_soldout_for_inventory_row(cur, row):
                 updated_at=excluded.updated_at
         """, (cidx, iidx, now_str()))
     else:
-        cur.execute(
-            "DELETE FROM soldout WHERE category_idx=? AND item_idx=?",
-            (cidx, iidx)
-        )
+        cur.execute("DELETE FROM soldout WHERE category_idx=? AND item_idx=?", (cidx, iidx))
 
 
 # ================== Session ==================
@@ -321,15 +312,25 @@ def load_order_by_session(session_id):
 
     oid, table, t, items, status = row
     items = json.loads(items) if items else []
+
+    # 補回 batch/submittedAt（舊資料可能沒有）
+    fixed = []
+    max_batch = 0
+    for it in items:
+        it = normalize_cart_item(it if isinstance(it, dict) else {})
+        max_batch = max(max_batch, int(it.get("batch") or 0))
+        fixed.append(it)
+
     return {
         "id": oid,
         "sessionId": session_id,
         "tableNo": table,
         "time": t,
         "status": status,
-        "items": items,
-        "total": calc_total(items),
+        "items": fixed,
+        "total": calc_total(fixed),
         "timestamp": to_ts_ms(t),
+        "lastBatch": max_batch or 1
     }
 
 
@@ -348,43 +349,100 @@ def load_all_orders(limit=200):
     orders = []
     for oid, sid, table, t, items, status in rows:
         items_list = json.loads(items) if items else []
+        fixed = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in items_list]
+        max_batch = 0
+        for it in fixed:
+            max_batch = max(max_batch, int(it.get("batch") or 0))
+
         orders.append({
             "id": oid,
             "sessionId": sid,
             "tableNo": table,
             "time": t,
             "status": status,
-            "items": items_list,
-            "total": calc_total(items_list),
+            "items": fixed,
+            "total": calc_total(fixed),
             "timestamp": to_ts_ms(t),
+            "lastBatch": max_batch or 1
         })
     return orders
 
 
-def create_order_from_cart(session_id: str, table: str, cart_items: list) -> int:
+def upsert_order_add_batch(session_id: str, table: str, new_items: list):
     """
-    ✅ 方案B：每次送出都建立一筆新的 orders
-    - session_id 可重複（同代碼會有多張單）
-    - status 一律 new
-    - items 存當下 cart 的快照
+    ✅ 同 orderId：加點只 append 到同一張 orders
+    ✅ 每次送出都用 batch 分組（batch=1、2、3...）
+    ✅ 如果原本 status=making，改回 new 讓店員看到「有加點」
     """
-    items = [normalize_cart_item(x) for x in (cart_items or [])]
-    if not items:
-        return None
+    new_items = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in (new_items or [])]
+    if not new_items:
+        return None, None
 
     with get_conn() as conn:
         c = conn.cursor()
+
         c.execute("""
-            INSERT INTO orders (session_id, table_num, time, items, status)
-            VALUES (?, ?, ?, ?, 'new')
+            SELECT id, items, status
+            FROM orders
+            WHERE session_id=?
+            ORDER BY id DESC LIMIT 1
+        """, (session_id,))
+        row = c.fetchone()
+
+        # 沒有任何訂單 -> 新建一張（orderId 產生一次）
+        if not row:
+            batch_no = 1
+            for it in new_items:
+                it["batch"] = batch_no
+                it["submittedAt"] = now_str()
+
+            c.execute("""
+                INSERT INTO orders (session_id, table_num, time, items, status)
+                VALUES (?, ?, ?, ?, 'new')
+            """, (
+                session_id,
+                table or "",
+                now_str(),
+                json.dumps(new_items, ensure_ascii=False),
+            ))
+            conn.commit()
+            return c.lastrowid, batch_no
+
+        oid, old_items_raw, old_status = row
+        old_items = json.loads(old_items_raw or "[]")
+
+        old_fixed = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in old_items]
+        max_batch = 0
+        for it in old_fixed:
+            max_batch = max(max_batch, int(it.get("batch") or 0))
+        batch_no = (max_batch or 1) + 1
+
+        for it in new_items:
+            it["batch"] = batch_no
+            it["submittedAt"] = now_str()
+
+        merged = old_fixed + new_items
+
+        # ✅ 有加點就把 making 拉回 new（提醒你有新單要出）
+        new_status = old_status
+        if old_status == "making":
+            new_status = "new"
+
+        #（可選）done/cancelled 你要不要仍然沿用同一張？
+        # 這裡保持同一張（照你要求 orderId 一樣）
+        c.execute("""
+            UPDATE orders
+            SET items=?, table_num=?, status=?, time=?
+            WHERE id=?
         """, (
-            session_id,
+            json.dumps(merged, ensure_ascii=False),
             table or "",
-            now_str(),
-            json.dumps(items, ensure_ascii=False),
+            new_status,
+            now_str(),   # 用最新時間，讓你在列表上看得出剛加點
+            oid
         ))
         conn.commit()
-        return c.lastrowid
+        return oid, batch_no
 
 
 # ================== Socket State ==================
@@ -587,7 +645,7 @@ def on_order_detail(data):
     emit("order_detail_result", {"ok": True, "exists": bool(o), "order": o})
 
 
-# ✅✅✅ 方案B：每次送出都新增一張新訂單（不再 append 到最後一張）
+# ✅ ✅ ✅ 核心：同 orderId 但加點分 batch
 @socketio.on("submit_cart_as_order")
 def on_submit(data):
     sid = str((data.get("sessionId") or "")).strip()
@@ -599,17 +657,16 @@ def on_submit(data):
 
     ensure_session(sid)
     cart = get_session_cart(sid)
-
     if not cart:
         emit("submit_result", {"ok": False, "msg": "cart empty"}, room=sid)
         return
 
-    oid = create_order_from_cart(sid, table, cart)
+    oid, batch_no = upsert_order_add_batch(sid, table, cart)
 
     save_session_cart(sid, [])
     locks_in_room[sid] = {}
 
-    emit("submit_result", {"ok": True, "orderId": oid}, room=sid)
+    emit("submit_result", {"ok": True, "orderId": oid, "batch": batch_no}, room=sid)
 
     socketio.emit(
         "order_detail_result",
@@ -699,10 +756,8 @@ def order_detail(sid):
     return jsonify({"ok": True, "exists": bool(o), "order": o})
 
 
-# ✅ soldout：GET 給前台讀；POST/PUT 給管理頁寫（需要 PIN）
 @app.route("/soldout", methods=["GET", "POST", "PUT", "OPTIONS"])
 def soldout_handler():
-
     if request.method == "OPTIONS":
         return ("", 204)
 
@@ -777,7 +832,6 @@ def api_call():
     return jsonify({"ok": True})
 
 
-# ================== REST: 庫存管理（和 soldout 連動） ==================
 @app.route("/api/inventory", methods=["GET"])
 def api_inventory_list():
     with get_conn() as conn:
@@ -835,11 +889,7 @@ def api_inventory_update(item_id):
 
             new_stock = max(0, row[0] + stock_val)
 
-            c.execute("""
-                UPDATE inventory
-                SET stock=?, updated_at=?
-                WHERE id=?
-            """, (new_stock, now_str(), item_id))
+            c.execute("UPDATE inventory SET stock=?, updated_at=? WHERE id=?", (new_stock, now_str(), item_id))
 
             c.execute("""
                 SELECT id, name, category, category_idx, item_idx, stock, updated_at
@@ -855,11 +905,7 @@ def api_inventory_update(item_id):
             if stock_val < 0:
                 stock_val = 0
 
-            c.execute("""
-                UPDATE inventory
-                SET stock=?, updated_at=?
-                WHERE id=?
-            """, (stock_val, now_str(), item_id))
+            c.execute("UPDATE inventory SET stock=?, updated_at=? WHERE id=?", (stock_val, now_str(), item_id))
             if c.rowcount == 0:
                 return jsonify({"ok": False, "msg": "not found"}), 404
 
