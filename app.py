@@ -43,7 +43,7 @@ socketio = SocketIO(
 )
 
 DB_FILE = "orders.db"
-SESSION_TTL_SECONDS = 24 * 60 * 60  # 24 小時
+SESSION_TTL_SECONDS = 24 * 60 * 60
 ORDER_STATUS_ALLOWED = {"new", "making", "done", "cancelled"}
 
 # ================== DB ==================
@@ -59,6 +59,7 @@ def init_db():
     with get_conn() as conn:
         c = conn.cursor()
 
+        # 主訂單（orderId 固定、items 累積）
         c.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,6 +68,20 @@ def init_db():
             time TEXT,
             items TEXT,
             status TEXT DEFAULT 'new'
+        )""")
+
+        # ✅ 每次送出（含加點）都新增一張 ticket（有自己 status）
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS order_tickets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER NOT NULL,
+            session_id TEXT NOT NULL,
+            table_num TEXT,
+            time TEXT,
+            items TEXT,
+            status TEXT DEFAULT 'new',
+            batch_no INTEGER DEFAULT 1,
+            FOREIGN KEY(order_id) REFERENCES orders(id)
         )""")
 
         c.execute("""
@@ -114,14 +129,11 @@ init_db()
 def now_dt():
     return datetime.datetime.now(TZ)
 
-
 def now_str():
     return now_dt().strftime("%Y-%m-%d %H:%M:%S")
 
-
 def expires_str():
     return (now_dt() + datetime.timedelta(seconds=SESSION_TTL_SECONDS)).strftime("%Y-%m-%d %H:%M:%S")
-
 
 def to_ts_ms(s):
     try:
@@ -130,8 +142,8 @@ def to_ts_ms(s):
     except Exception:
         return int(time.time() * 1000)
 
-
 def normalize_cart_item(item: dict) -> dict:
+    item = item or {}
     return {
         "lineId": item.get("lineId") or uuid.uuid4().hex,
         "name": str(item.get("name", "")),
@@ -143,19 +155,14 @@ def normalize_cart_item(item: dict) -> dict:
         "addOns": item.get("addOns", []),
         "addedBy": str(item.get("addedBy", "")).strip()[:20] or None,
         "category": item.get("category"),
-        # 下面兩個欄位給「加點分張」用（不影響舊前端/舊App）
-        "batch": int(item.get("batch", 0) or 0),
-        "submittedAt": item.get("submittedAt") or None,
     }
 
-
-def calc_total(cart):
+def calc_total(items):
     total = 0
-    for it in cart or []:
+    for it in items or []:
         add = sum(int(a.get("price", 0)) for a in it.get("addOns", []) if isinstance(a, dict))
         total += (int(it.get("price", 0)) + add) * int(it.get("qty", 1))
     return total
-
 
 # ================== Call State ==================
 def get_call_state():
@@ -167,7 +174,6 @@ def get_call_state():
         return {"code": "", "updated_at": 0}
     return {"code": row[0] or "", "updated_at": int(row[1] or 0)}
 
-
 def set_call_code(code: str):
     code = (code or "").strip()
     now_ts = int(time.time())
@@ -178,24 +184,13 @@ def set_call_code(code: str):
     socketio.emit("call_update", {"ok": True, "code": code, "updatedAt": now_ts})
     return True
 
-
-def get_session_id_by_order_id(oid: int):
-    with get_conn() as conn:
-        c = conn.cursor()
-        c.execute("SELECT session_id FROM orders WHERE id=?", (oid,))
-        row = c.fetchone()
-    return row[0] if row else None
-
-
 # ================== Inventory / Soldout 連動 ==================
 def sync_soldout_for_inventory_row(cur, row):
     if not row:
         return
-
     _id, name, category, cidx, iidx, stock, updated_at = row
     if cidx is None or iidx is None:
         return
-
     if stock <= 0:
         cur.execute("""
             INSERT INTO soldout (category_idx, item_idx, updated_at)
@@ -206,28 +201,23 @@ def sync_soldout_for_inventory_row(cur, row):
     else:
         cur.execute("DELETE FROM soldout WHERE category_idx=? AND item_idx=?", (cidx, iidx))
 
-
 # ================== Session ==================
 def session_is_active(session_id):
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("SELECT expires_at FROM sessions WHERE session_id=?", (session_id,))
         row = c.fetchone()
-
     if not row or not row[0]:
         return False
-
     try:
         exp = datetime.datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ)
         return now_dt() < exp
     except Exception:
         return False
 
-
 def ensure_session(session_id, force_reset=False):
     if not session_id:
         return
-
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("SELECT expires_at FROM sessions WHERE session_id=?", (session_id,))
@@ -257,7 +247,6 @@ def ensure_session(session_id, force_reset=False):
             """, ("[]", now_str(), expires_str(), now_str(), session_id))
             conn.commit()
 
-
 def create_unique_session_id():
     for _ in range(300):
         sid = str(random.randint(1000, 9999))
@@ -265,7 +254,6 @@ def create_unique_session_id():
             ensure_session(sid, force_reset=True)
             return sid
     raise RuntimeError("No available sessionId")
-
 
 def get_session_cart(session_id):
     with get_conn() as conn:
@@ -279,9 +267,8 @@ def get_session_cart(session_id):
     except Exception:
         return []
 
-
 def save_session_cart(session_id, cart):
-    cart = [normalize_cart_item(x) for x in cart or []]
+    cart = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in (cart or [])]
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("""
@@ -294,8 +281,81 @@ def save_session_cart(session_id, cart):
         """, (session_id, json.dumps(cart, ensure_ascii=False), now_str(), expires_str(), now_str()))
         conn.commit()
 
+# ================== Orders (Header + Tickets) ==================
+def _get_latest_order_header(session_id: str):
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, table_num, time, items, status
+            FROM orders
+            WHERE session_id=?
+            ORDER BY id DESC LIMIT 1
+        """, (session_id,))
+        return c.fetchone()
 
-# ================== Orders ==================
+def _get_next_batch_no(order_id: int) -> int:
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("SELECT COALESCE(MAX(batch_no), 0) FROM order_tickets WHERE order_id=?", (order_id,))
+        n = c.fetchone()[0] or 0
+    return int(n) + 1
+
+def _create_order_header(session_id: str, table: str, items: list) -> int:
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO orders (session_id, table_num, time, items, status)
+            VALUES (?, ?, ?, ?, 'new')
+        """, (session_id, table or "", now_str(), json.dumps(items, ensure_ascii=False)))
+        conn.commit()
+        return int(c.lastrowid)
+
+def _append_items_to_header(order_id: int, table: str, new_items: list):
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("SELECT items FROM orders WHERE id=?", (order_id,))
+        row = c.fetchone()
+        old_items = json.loads(row[0] or "[]") if row else []
+        merged = old_items + new_items
+        # ✅ 不動 status，不拉回存單區；也不改主訂單時間（你要製作區不變）
+        c.execute("""
+            UPDATE orders
+            SET items=?, table_num=?
+            WHERE id=?
+        """, (json.dumps(merged, ensure_ascii=False), table or "", order_id))
+        conn.commit()
+
+def _create_ticket(order_id: int, session_id: str, table: str, items: list, batch_no: int) -> int:
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO order_tickets (order_id, session_id, table_num, time, items, status, batch_no)
+            VALUES (?, ?, ?, ?, ?, 'new', ?)
+        """, (order_id, session_id, table or "", now_str(), json.dumps(items, ensure_ascii=False), int(batch_no)))
+        conn.commit()
+        return int(c.lastrowid)
+
+def submit_cart_create_ticket(session_id: str, table: str, cart: list):
+    cart_items = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in (cart or [])]
+    if not cart_items:
+        return None
+
+    header = _get_latest_order_header(session_id)
+
+    if not header:
+        # 第一次送出：建立主訂單 header
+        order_id = _create_order_header(session_id, table, cart_items)
+        batch_no = 1
+    else:
+        order_id = int(header[0])
+        batch_no = _get_next_batch_no(order_id)
+        # 加點：把新 items 累積到主訂單
+        _append_items_to_header(order_id, table, cart_items)
+
+    # ✅ 不動主訂單狀態；只新增 ticket（會出現在存單區）
+    ticket_id = _create_ticket(order_id, session_id, table, cart_items, batch_no)
+    return {"orderId": order_id, "ticketId": ticket_id, "batchNo": batch_no}
+
 def load_order_by_session(session_id):
     with get_conn() as conn:
         c = conn.cursor()
@@ -312,14 +372,7 @@ def load_order_by_session(session_id):
 
     oid, table, t, items, status = row
     items = json.loads(items) if items else []
-
-    # 補回 batch/submittedAt（舊資料可能沒有）
-    fixed = []
-    max_batch = 0
-    for it in items:
-        it = normalize_cart_item(it if isinstance(it, dict) else {})
-        max_batch = max(max_batch, int(it.get("batch") or 0))
-        fixed.append(it)
+    items = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in items]
 
     return {
         "id": oid,
@@ -327,133 +380,72 @@ def load_order_by_session(session_id):
         "tableNo": table,
         "time": t,
         "status": status,
-        "items": fixed,
-        "total": calc_total(fixed),
+        "items": items,
+        "total": calc_total(items),
         "timestamp": to_ts_ms(t),
-        "lastBatch": max_batch or 1
     }
 
-
-def load_all_orders(limit=200):
+def load_all_tickets(limit=200):
     limit = max(1, min(int(limit or 200), 500))
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("""
-            SELECT id, session_id, table_num, time, items, status
-            FROM orders
-            ORDER BY id DESC
+            SELECT
+                t.id AS ticket_id,
+                t.order_id AS order_id,
+                t.session_id,
+                t.table_num,
+                t.time,
+                t.items,
+                t.status,
+                t.batch_no
+            FROM order_tickets t
+            ORDER BY t.id DESC
             LIMIT ?
         """, (limit,))
         rows = c.fetchall()
 
-    orders = []
-    for oid, sid, table, t, items, status in rows:
+    out = []
+    for ticket_id, order_id, sid, table, t, items, status, batch_no in rows:
         items_list = json.loads(items) if items else []
-        fixed = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in items_list]
-        max_batch = 0
-        for it in fixed:
-            max_batch = max(max_batch, int(it.get("batch") or 0))
-
-        orders.append({
-            "id": oid,
+        items_list = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in items_list]
+        out.append({
+            # ✅ 這個 id 是 ticket 的 id（用來更新狀態）
+            "id": int(ticket_id),
+            # ✅ 這個才是你要「編號一樣」的主訂單編號（顯示用）
+            "orderId": int(order_id),
+            "batchNo": int(batch_no or 1),
             "sessionId": sid,
             "tableNo": table,
             "time": t,
             "status": status,
-            "items": fixed,
-            "total": calc_total(fixed),
+            "items": items_list,
+            "total": calc_total(items_list),
             "timestamp": to_ts_ms(t),
-            "lastBatch": max_batch or 1
         })
-    return orders
+    return out
 
-
-def upsert_order_add_batch(session_id: str, table: str, new_items: list):
-    """
-    ✅ 同 orderId：加點只 append 到同一張 orders
-    ✅ 每次送出都用 batch 分組（batch=1、2、3...）
-    ✅ 如果原本 status=making，改回 new 讓店員看到「有加點」
-    """
-    new_items = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in (new_items or [])]
-    if not new_items:
-        return None, None
-
+def update_ticket_status(ticket_id: int, status: str) -> bool:
     with get_conn() as conn:
         c = conn.cursor()
-
-        c.execute("""
-            SELECT id, items, status
-            FROM orders
-            WHERE session_id=?
-            ORDER BY id DESC LIMIT 1
-        """, (session_id,))
-        row = c.fetchone()
-
-        # 沒有任何訂單 -> 新建一張（orderId 產生一次）
-        if not row:
-            batch_no = 1
-            for it in new_items:
-                it["batch"] = batch_no
-                it["submittedAt"] = now_str()
-
-            c.execute("""
-                INSERT INTO orders (session_id, table_num, time, items, status)
-                VALUES (?, ?, ?, ?, 'new')
-            """, (
-                session_id,
-                table or "",
-                now_str(),
-                json.dumps(new_items, ensure_ascii=False),
-            ))
-            conn.commit()
-            return c.lastrowid, batch_no
-
-        oid, old_items_raw, old_status = row
-        old_items = json.loads(old_items_raw or "[]")
-
-        old_fixed = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in old_items]
-        max_batch = 0
-        for it in old_fixed:
-            max_batch = max(max_batch, int(it.get("batch") or 0))
-        batch_no = (max_batch or 1) + 1
-
-        for it in new_items:
-            it["batch"] = batch_no
-            it["submittedAt"] = now_str()
-
-        merged = old_fixed + new_items
-
-        # ✅ 有加點就把 making 拉回 new（提醒你有新單要出）
-        new_status = old_status
-        if old_status == "making":
-            new_status = "new"
-
-        #（可選）done/cancelled 你要不要仍然沿用同一張？
-        # 這裡保持同一張（照你要求 orderId 一樣）
-        c.execute("""
-            UPDATE orders
-            SET items=?, table_num=?, status=?, time=?
-            WHERE id=?
-        """, (
-            json.dumps(merged, ensure_ascii=False),
-            table or "",
-            new_status,
-            now_str(),   # 用最新時間，讓你在列表上看得出剛加點
-            oid
-        ))
+        c.execute("UPDATE order_tickets SET status=? WHERE id=?", (status, ticket_id))
         conn.commit()
-        return oid, batch_no
+        return c.rowcount > 0
 
+def get_session_id_by_ticket_id(ticket_id: int):
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("SELECT session_id FROM order_tickets WHERE id=?", (ticket_id,))
+        row = c.fetchone()
+    return row[0] if row else None
 
 # ================== Socket State ==================
-users_in_room = {}   # {sessionId: {socketSid: {sid,nickname}}}
-locks_in_room = {}   # {sessionId: {lineId: {bySid, byName, ts}}}
-
+users_in_room = {}
+locks_in_room = {}
 
 def locks_public(session_id):
     d = locks_in_room.get(session_id, {}) or {}
     return {lineId: {"byName": v.get("byName")} for lineId, v in d.items()}
-
 
 def broadcast_state(session_id):
     cart = get_session_cart(session_id)
@@ -469,13 +461,11 @@ def broadcast_state(session_id):
         room=session_id,
     )
 
-
 def _find_item_idx(cart, line_id: str):
     for i, it in enumerate(cart or []):
         if str(it.get("lineId", "")) == str(line_id):
             return i
     return -1
-
 
 @socketio.on("create_session")
 def on_create_session(_):
@@ -485,17 +475,14 @@ def on_create_session(_):
     except Exception as e:
         emit("create_session_result", {"ok": False, "msg": str(e)})
 
-
 @socketio.on("join_session")
 def on_join(data):
     sid = str((data.get("sessionId") or "")).strip()
     name = str((data.get("nickname") or "訪客")).strip()[:12] or "訪客"
     ensure_session(sid)
-
     join_room(sid)
     users_in_room.setdefault(sid, {})[request.sid] = {"sid": request.sid, "nickname": name}
     broadcast_state(sid)
-
 
 @socketio.on("set_nickname")
 def on_set_nickname(data):
@@ -507,7 +494,6 @@ def on_set_nickname(data):
         users_in_room[sid][request.sid]["nickname"] = name
     broadcast_state(sid)
 
-
 @socketio.on("lock_line")
 def on_lock_line(data):
     sid = str((data.get("sessionId") or "")).strip()
@@ -518,7 +504,6 @@ def on_lock_line(data):
 
     locks_in_room.setdefault(sid, {})
     cur = locks_in_room[sid].get(line_id)
-
     if cur and cur.get("bySid") != request.sid:
         emit("lock_denied", {"lineId": line_id, "byName": cur.get("byName", "別人")})
         return
@@ -526,7 +511,6 @@ def on_lock_line(data):
     locks_in_room[sid][line_id] = {"bySid": request.sid, "byName": name, "ts": int(time.time())}
     socketio.emit("lock_update", {"lineId": line_id, "byName": name}, room=sid)
     broadcast_state(sid)
-
 
 @socketio.on("unlock_line")
 def on_unlock_line(data):
@@ -536,15 +520,12 @@ def on_unlock_line(data):
         return
 
     cur = (locks_in_room.get(sid, {}) or {}).get(line_id)
-    if not cur:
-        return
-    if cur.get("bySid") != request.sid:
+    if not cur or cur.get("bySid") != request.sid:
         return
 
     del locks_in_room[sid][line_id]
     socketio.emit("lock_remove", {"lineId": line_id}, room=sid)
     broadcast_state(sid)
-
 
 @socketio.on("cart_add")
 def on_cart_add(data):
@@ -555,13 +536,11 @@ def on_cart_add(data):
     save_session_cart(sid, cart)
     broadcast_state(sid)
 
-
 @socketio.on("cart_set_qty")
 def on_cart_set_qty(data):
     sid = str((data.get("sessionId") or "")).strip()
     line_id = str((data.get("lineId") or "")).strip()
-    qty = int(data.get("qty") or 1)
-    qty = max(1, qty)
+    qty = max(1, int(data.get("qty") or 1))
 
     if not sid or not line_id:
         return
@@ -581,7 +560,6 @@ def on_cart_set_qty(data):
     cart[idx]["qty"] = qty
     save_session_cart(sid, cart)
     broadcast_state(sid)
-
 
 @socketio.on("cart_set_remark")
 def on_cart_set_remark(data):
@@ -607,7 +585,6 @@ def on_cart_set_remark(data):
     cart[idx]["remark"] = remark
     save_session_cart(sid, cart)
     broadcast_state(sid)
-
 
 @socketio.on("cart_remove")
 def on_cart_remove(data):
@@ -637,15 +614,12 @@ def on_cart_remove(data):
     save_session_cart(sid, cart)
     broadcast_state(sid)
 
-
 @socketio.on("order_detail")
 def on_order_detail(data):
     sid = str((data.get("sessionId") or "")).strip()
     o = load_order_by_session(sid)
     emit("order_detail_result", {"ok": True, "exists": bool(o), "order": o})
 
-
-# ✅ ✅ ✅ 核心：同 orderId 但加點分 batch
 @socketio.on("submit_cart_as_order")
 def on_submit(data):
     sid = str((data.get("sessionId") or "")).strip()
@@ -661,12 +635,16 @@ def on_submit(data):
         emit("submit_result", {"ok": False, "msg": "cart empty"}, room=sid)
         return
 
-    oid, batch_no = upsert_order_add_batch(sid, table, cart)
+    result = submit_cart_create_ticket(sid, table, cart)
+    if not result:
+        emit("submit_result", {"ok": False, "msg": "submit failed"}, room=sid)
+        return
 
     save_session_cart(sid, [])
     locks_in_room[sid] = {}
 
-    emit("submit_result", {"ok": True, "orderId": oid, "batch": batch_no}, room=sid)
+    # ✅ orderId（主訂單編號）固定；ticketId 是這次加點單用來更新狀態
+    emit("submit_result", {"ok": True, "orderId": result["orderId"], "ticketId": result["ticketId"], "batchNo": result["batchNo"]}, room=sid)
 
     socketio.emit(
         "order_detail_result",
@@ -674,7 +652,6 @@ def on_submit(data):
         room=sid,
     )
     broadcast_state(sid)
-
 
 @socketio.on("disconnect")
 def on_disconnect():
@@ -688,17 +665,15 @@ def on_disconnect():
                 socketio.emit("lock_remove", {"lineId": lineId}, room=sid)
             broadcast_state(sid)
 
-
-# ================== REST: 訂單 / session / soldout ==================
+# ================== REST: tickets = 店員面板用 ==================
 @app.route("/orders", methods=["GET"])
 def list_orders():
     try:
         limit = int(request.args.get("limit", "200"))
     except ValueError:
         limit = 200
-    orders = load_all_orders(limit)
-    return jsonify({"ok": True, "count": len(orders), "orders": orders})
-
+    tickets = load_all_tickets(limit)
+    return jsonify({"ok": True, "count": len(tickets), "orders": tickets})
 
 @app.route("/api/orders", methods=["GET"])
 def list_orders_api():
@@ -706,56 +681,56 @@ def list_orders_api():
         limit = int(request.args.get("limit", "200"))
     except ValueError:
         limit = 200
-    orders = load_all_orders(limit)
-    return jsonify({"ok": True, "orders": orders})
+    tickets = load_all_tickets(limit)
+    return jsonify({"ok": True, "orders": tickets})
 
-
-@app.route("/orders/<int:oid>/status", methods=["POST"])
-def update_order_status(oid):
+# ✅ 這裡改成更新 ticket 狀態（不是主訂單）
+@app.route("/api/orders/<int:ticket_id>/status", methods=["POST"])
+def update_order_status_api(ticket_id):
     data = request.get_json(silent=True) or {}
     status = str(data.get("status", "")).strip().lower()
-
     if status not in ORDER_STATUS_ALLOWED:
         return jsonify({"ok": False, "msg": "invalid status"}), 400
 
-    with get_conn() as conn:
-        c = conn.cursor()
-        c.execute("UPDATE orders SET status=? WHERE id=?", (status, oid))
-        conn.commit()
-        if c.rowcount == 0:
-            return jsonify({"ok": False, "msg": "order not found"}), 404
+    ok = update_ticket_status(ticket_id, status)
+    if not ok:
+        return jsonify({"ok": False, "msg": "ticket not found"}), 404
 
+    # done 就叫號（用 sessionId）
     if status == "done":
-        sid = get_session_id_by_order_id(oid)
+        sid = get_session_id_by_ticket_id(ticket_id)
         if sid:
             set_call_code(str(sid))
 
     return jsonify({"ok": True})
 
+# 保留舊 route（如果你有舊客戶端叫 /orders/<id>/status）
+@app.route("/orders/<int:ticket_id>/status", methods=["POST"])
+def update_order_status_legacy(ticket_id):
+    return update_order_status_api(ticket_id)
 
-@app.route("/api/orders/<int:oid>/status", methods=["POST"])
-def update_order_status_api(oid):
-    return update_order_status(oid)
-
-
+# ================== REST: session / order detail（客戶明細用） ==================
 @app.route("/session/new", methods=["POST"])
 def new_session():
     sid = create_unique_session_id()
     return jsonify({"ok": True, "sessionId": sid})
 
+@app.route("/session/exists/<sid>", methods=["GET"])
+def session_exists(sid):
+    sid = str(sid or "").strip()
+    return jsonify({"ok": True, "exists": bool(sid) and session_is_active(sid)})
 
 @app.route("/order_by_session/<sid>", methods=["GET"])
 def order_by_session(sid):
     o = load_order_by_session(sid)
     return jsonify({"ok": True, "exists": bool(o), "order": o})
 
-
 @app.route("/order_detail/<sid>", methods=["GET"])
 def order_detail(sid):
     o = load_order_by_session(sid)
     return jsonify({"ok": True, "exists": bool(o), "order": o})
 
-
+# ================== soldout ==================
 @app.route("/soldout", methods=["GET", "POST", "PUT", "OPTIONS"])
 def soldout_handler():
     if request.method == "OPTIONS":
@@ -804,18 +779,7 @@ def soldout_handler():
 
     return jsonify({"ok": True, "count": len(clean)})
 
-
-@app.route("/health")
-def health():
-    return jsonify({"ok": True})
-
-
-@app.route("/session/exists/<sid>", methods=["GET"])
-def session_exists(sid):
-    sid = str(sid or "").strip()
-    return jsonify({"ok": True, "exists": bool(sid) and session_is_active(sid)})
-
-
+# ================== Call API ==================
 @app.route("/api/call", methods=["GET", "POST"])
 def api_call():
     if request.method == "GET":
@@ -831,7 +795,7 @@ def api_call():
     set_call_code(code)
     return jsonify({"ok": True})
 
-
+# ================== Inventory ==================
 @app.route("/api/inventory", methods=["GET"])
 def api_inventory_list():
     with get_conn() as conn:
@@ -867,7 +831,6 @@ def api_inventory_list():
         })
     return jsonify({"ok": True, "items": items})
 
-
 @app.route("/api/inventory/<int:item_id>", methods=["POST"])
 def api_inventory_update(item_id):
     data = request.get_json(silent=True) or {}
@@ -888,7 +851,6 @@ def api_inventory_update(item_id):
                 return jsonify({"ok": False, "msg": "not found"}), 404
 
             new_stock = max(0, row[0] + stock_val)
-
             c.execute("UPDATE inventory SET stock=?, updated_at=? WHERE id=?", (new_stock, now_str(), item_id))
 
             c.execute("""
@@ -904,7 +866,6 @@ def api_inventory_update(item_id):
         else:
             if stock_val < 0:
                 stock_val = 0
-
             c.execute("UPDATE inventory SET stock=?, updated_at=? WHERE id=?", (stock_val, now_str(), item_id))
             if c.rowcount == 0:
                 return jsonify({"ok": False, "msg": "not found"}), 404
@@ -919,6 +880,9 @@ def api_inventory_update(item_id):
             conn.commit()
             return jsonify({"ok": True, "stock": stock_val})
 
+@app.route("/health")
+def health():
+    return jsonify({"ok": True})
 
 # ================== Run ==================
 if __name__ == "__main__":
