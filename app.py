@@ -351,6 +351,28 @@ def _find_existing_order_for_session(session_id: str):
     return int(row[0]) if row and row[0] else None
 
 
+def get_daily_order_no(order_id: int, order_time: str) -> int:
+    try:
+        day_str = str(order_time or "")[:10]
+        if not day_str:
+            return int(order_id)
+        with get_conn() as conn:
+            c = conn.cursor()
+            c.execute(
+                """
+                SELECT COUNT(*)
+                FROM orders
+                WHERE substr(time, 1, 10) = ?
+                  AND id <= ?
+                """,
+                (day_str, int(order_id)),
+            )
+            row = c.fetchone()
+        return int(row[0] or 0) or int(order_id)
+    except Exception:
+        return int(order_id)
+
+
 # ✅ 建立主訂單時 items 一律先空（避免第一次送出被加兩次）
 def _create_order_header(session_id: str, table: str) -> int:
     with get_conn() as conn:
@@ -507,7 +529,7 @@ def load_order_by_session(session_id):
     items = dedupe_by_line_id(items)  # ✅ 讓舊資料立刻不再顯示重複
 
     return {
-        "id": int(oid),                 # 固定訂單編號
+        "id": get_daily_order_no(int(oid), t),
         "sessionId": sid,               # 代碼
         "tableNo": table,
         "time": t,
@@ -546,7 +568,7 @@ def load_all_tickets(limit=200):
 
         out.append({
             "id": int(ticket_id),         # ticketId（更新狀態用）
-            "orderId": int(order_id),     # 顯示用：同代碼永遠相同
+            "orderId": get_daily_order_no(int(order_id), t),
             "batchNo": int(batch_no or 1),
             "sessionId": sid,
             "tableNo": table,
@@ -781,9 +803,11 @@ def on_submit(data):
     save_session_cart(sid, [])
     locks_in_room[sid] = {}
 
+    order_detail = load_order_by_session(sid)
+
     emit("submit_result", {
         "ok": True,
-        "orderId": result["orderId"],   # 固定訂單編號（同代碼永遠相同）
+        "orderId": int(order_detail["id"]) if order_detail else result["orderId"],
         "ticketId": result["ticketId"], # ticketId（更新狀態/出單用）
         "batchNo": result["batchNo"],
         "merged": result["merged"],
@@ -791,7 +815,7 @@ def on_submit(data):
 
     socketio.emit(
         "order_detail_result",
-        {"ok": True, "exists": True, "order": load_order_by_session(sid)},
+        {"ok": True, "exists": True, "order": order_detail},
         room=sid,
     )
     broadcast_state(sid)
