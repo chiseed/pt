@@ -67,7 +67,6 @@ def init_db():
     with get_conn() as conn:
         c = conn.cursor()
 
-        # 主訂單（orderId 固定、items 累積）
         c.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,7 +77,6 @@ def init_db():
             status TEXT DEFAULT 'new'
         )""")
 
-        # 每次送出（含加點）都新增/合併一張 ticket（存單區依 ticket 狀態）
         c.execute("""
         CREATE TABLE IF NOT EXISTS order_tickets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,7 +99,6 @@ def init_db():
             updated_at TEXT
         )""")
 
-        # migrate：sessions 增加 order_id（把代碼固定綁一個訂單編號）
         if not _col_exists(conn, "sessions", "order_id"):
             c.execute("ALTER TABLE sessions ADD COLUMN order_id INTEGER")
             conn.commit()
@@ -160,6 +157,11 @@ def to_ts_ms(s):
         return int(time.time() * 1000)
 
 
+def normalize_status(status: str, default: str = "new") -> str:
+    s = str(status or default).strip().lower()
+    return s if s in ORDER_STATUS_ALLOWED else default
+
+
 def normalize_cart_item(item: dict) -> dict:
     item = item or {}
     return {
@@ -184,7 +186,6 @@ def calc_total(items):
     return total
 
 
-# ✅ 防重：同一個 lineId 只保留第一筆（避免「送出後變兩個」）
 def dedupe_by_line_id(items: list) -> list:
     seen = set()
     out = []
@@ -373,27 +374,26 @@ def get_daily_order_no(order_id: int, order_time: str) -> int:
         return int(order_id)
 
 
-# ✅ 建立主訂單時 items 一律先空（避免第一次送出被加兩次）
-def _create_order_header(session_id: str, table: str) -> int:
+def _create_order_header(session_id: str, table: str, status: str = "new") -> int:
+    status = normalize_status(status, "new")
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("""
             INSERT INTO orders (session_id, table_num, time, items, status)
-            VALUES (?, ?, ?, ?, 'new')
-        """, (session_id, table or "", now_str(), "[]"))
+            VALUES (?, ?, ?, ?, ?)
+        """, (session_id, table or "", now_str(), "[]", status))
         conn.commit()
         return int(c.lastrowid)
 
 
-# ✅ 主訂單永遠用 append 一次；append 後做 lineId 去重
-def _append_items_to_header(order_id: int, table: str, new_items: list):
+def _append_items_to_header(order_id: int, table: str, new_items: list, status: str | None = None):
     new_items = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in (new_items or [])]
     if not new_items:
         return
 
     with get_conn() as conn:
         c = conn.cursor()
-        c.execute("SELECT items FROM orders WHERE id=?", (int(order_id),))
+        c.execute("SELECT items, status FROM orders WHERE id=?", (int(order_id),))
         row = c.fetchone()
         old_items = json.loads(row[0] or "[]") if row else []
 
@@ -401,11 +401,29 @@ def _append_items_to_header(order_id: int, table: str, new_items: list):
         merged = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in merged]
         merged = dedupe_by_line_id(merged)
 
-        c.execute("""
-            UPDATE orders
-            SET items=?, table_num=?, time=?
-            WHERE id=?
-        """, (json.dumps(merged, ensure_ascii=False), table or "", now_str(), int(order_id)))
+        if status and normalize_status(status, "new") != "new":
+            c.execute("""
+                UPDATE orders
+                SET items=?, table_num=?, time=?, status=?
+                WHERE id=?
+            """, (
+                json.dumps(merged, ensure_ascii=False),
+                table or "",
+                now_str(),
+                normalize_status(status, "new"),
+                int(order_id)
+            ))
+        else:
+            c.execute("""
+                UPDATE orders
+                SET items=?, table_num=?, time=?
+                WHERE id=?
+            """, (
+                json.dumps(merged, ensure_ascii=False),
+                table or "",
+                now_str(),
+                int(order_id)
+            ))
         conn.commit()
 
 
@@ -420,7 +438,7 @@ def _get_open_new_ticket(order_id: int):
             LIMIT 1
         """, (int(order_id),))
         row = c.fetchone()
-    return row  # (ticketId, items_json, batch_no) or None
+    return row
 
 
 def _get_next_batch_no(order_id: int) -> int:
@@ -431,13 +449,22 @@ def _get_next_batch_no(order_id: int) -> int:
     return int(n) + 1
 
 
-def _create_ticket(order_id: int, session_id: str, table: str, items: list, batch_no: int) -> int:
+def _create_ticket(order_id: int, session_id: str, table: str, items: list, batch_no: int, status: str = "new") -> int:
+    status = normalize_status(status, "new")
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("""
             INSERT INTO order_tickets (order_id, session_id, table_num, time, items, status, batch_no)
-            VALUES (?, ?, ?, ?, ?, 'new', ?)
-        """, (int(order_id), session_id, table or "", now_str(), json.dumps(items, ensure_ascii=False), int(batch_no)))
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            int(order_id),
+            session_id,
+            table or "",
+            now_str(),
+            json.dumps(items, ensure_ascii=False),
+            status,
+            int(batch_no)
+        ))
         conn.commit()
         return int(c.lastrowid)
 
@@ -456,7 +483,7 @@ def _merge_into_ticket(ticket_id: int, merged_items: list):
         conn.commit()
 
 
-def get_or_create_order_id_for_session(session_id: str, table: str) -> int:
+def get_or_create_order_id_for_session(session_id: str, table: str, status: str = "new") -> int:
     ensure_session(session_id)
 
     oid = _get_session_order_id(session_id)
@@ -468,38 +495,52 @@ def get_or_create_order_id_for_session(session_id: str, table: str) -> int:
         _set_session_order_id(session_id, existing)
         return int(existing)
 
-    new_oid = _create_order_header(session_id, table)
+    new_oid = _create_order_header(session_id, table, status=status)
     _set_session_order_id(session_id, new_oid)
     return int(new_oid)
 
 
-def submit_cart_create_or_merge_ticket(session_id: str, table: str, cart: list):
+def submit_cart_create_or_merge_ticket(session_id: str, table: str, cart: list, status: str = "new"):
+    status = normalize_status(status, "new")
     cart_items = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in (cart or [])]
     cart_items = dedupe_by_line_id(cart_items)
     if not cart_items:
         return None
 
-    order_id = get_or_create_order_id_for_session(session_id, table)
+    order_id = get_or_create_order_id_for_session(session_id, table, status=status)
 
-    # 主訂單永遠累積（只加一次）
-    _append_items_to_header(order_id, table, cart_items)
+    # 主訂單永遠累積一次
+    _append_items_to_header(order_id, table, cart_items, status=status)
 
-    # 存單合併：若已有 status=new ticket 就合併
-    open_ticket = _get_open_new_ticket(order_id)
-    if open_ticket:
-        ticket_id, old_items_json, batch_no = open_ticket
-        try:
-            old_items = json.loads(old_items_json or "[]")
-        except Exception:
-            old_items = []
-        merged = (old_items or []) + cart_items
-        _merge_into_ticket(ticket_id, merged)
-        return {"orderId": order_id, "ticketId": int(ticket_id), "batchNo": int(batch_no or 1), "merged": True}
+    # 只有 new 才允許合併進既有存單
+    if status == "new":
+        open_ticket = _get_open_new_ticket(order_id)
+        if open_ticket:
+            ticket_id, old_items_json, batch_no = open_ticket
+            try:
+                old_items = json.loads(old_items_json or "[]")
+            except Exception:
+                old_items = []
+            merged = (old_items or []) + cart_items
+            _merge_into_ticket(ticket_id, merged)
+            return {
+                "orderId": order_id,
+                "ticketId": int(ticket_id),
+                "batchNo": int(batch_no or 1),
+                "merged": True,
+                "status": "new",
+            }
 
-    # 沒有存單 → 新增一張新的「加點存單」
+    # done / making / cancelled 或沒有 open new ticket，就直接新建一張對應狀態的 ticket
     batch_no = _get_next_batch_no(order_id)
-    ticket_id = _create_ticket(order_id, session_id, table, cart_items, batch_no)
-    return {"orderId": order_id, "ticketId": ticket_id, "batchNo": batch_no, "merged": False}
+    ticket_id = _create_ticket(order_id, session_id, table, cart_items, batch_no, status=status)
+    return {
+        "orderId": order_id,
+        "ticketId": ticket_id,
+        "batchNo": batch_no,
+        "merged": False,
+        "status": status,
+    }
 
 
 def load_order_by_session(session_id):
@@ -526,16 +567,57 @@ def load_order_by_session(session_id):
     oid, table, t, items, status, sid = row
     items = json.loads(items) if items else []
     items = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in items]
-    items = dedupe_by_line_id(items)  # ✅ 讓舊資料立刻不再顯示重複
+    items = dedupe_by_line_id(items)
 
     return {
         "id": get_daily_order_no(int(oid), t),
-        "sessionId": sid,               # 代碼
+        "sessionId": sid,
         "tableNo": table,
         "time": t,
         "status": status,
         "items": items,
-        "total": calc_total(items),     # ✅ total 也跟著正常
+        "total": calc_total(items),
+        "timestamp": to_ts_ms(t),
+    }
+
+
+def load_ticket_by_id(ticket_id: int):
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("""
+            SELECT
+                t.id AS ticket_id,
+                t.order_id AS order_id,
+                t.session_id,
+                t.table_num,
+                t.time,
+                t.items,
+                t.status,
+                t.batch_no
+            FROM order_tickets t
+            WHERE t.id = ?
+            LIMIT 1
+        """, (int(ticket_id),))
+        row = c.fetchone()
+
+    if not row:
+        return None
+
+    ticket_id, order_id, sid, table, t, items, status, batch_no = row
+    items_list = json.loads(items) if items else []
+    items_list = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in items_list]
+    items_list = dedupe_by_line_id(items_list)
+
+    return {
+        "id": int(ticket_id),  # ticketId
+        "orderId": get_daily_order_no(int(order_id), t),
+        "batchNo": int(batch_no or 1),
+        "sessionId": sid,
+        "tableNo": table,
+        "time": t,
+        "status": status,
+        "items": items_list,
+        "total": calc_total(items_list),
         "timestamp": to_ts_ms(t),
     }
 
@@ -567,7 +649,7 @@ def load_all_tickets(limit=200):
         items_list = dedupe_by_line_id(items_list)
 
         out.append({
-            "id": int(ticket_id),         # ticketId（更新狀態用）
+            "id": int(ticket_id),  # ticketId（更新狀態用）
             "orderId": get_daily_order_no(int(order_id), t),
             "batchNo": int(batch_no or 1),
             "sessionId": sid,
@@ -582,11 +664,22 @@ def load_all_tickets(limit=200):
 
 
 def update_ticket_status(ticket_id: int, status: str) -> bool:
+    status = normalize_status(status, "new")
     with get_conn() as conn:
         c = conn.cursor()
+
         c.execute("UPDATE order_tickets SET status=? WHERE id=?", (status, int(ticket_id)))
+        ok = c.rowcount > 0
+
+        # 同步主訂單狀態為最近一次變更
+        if ok:
+            c.execute("SELECT order_id FROM order_tickets WHERE id=?", (int(ticket_id),))
+            row = c.fetchone()
+            if row and row[0]:
+                c.execute("UPDATE orders SET status=?, time=? WHERE id=?", (status, now_str(), int(row[0])))
+
         conn.commit()
-        return c.rowcount > 0
+        return ok
 
 
 def get_session_id_by_ticket_id(ticket_id: int):
@@ -785,6 +878,8 @@ def on_order_detail(data):
 def on_submit(data):
     sid = str((data.get("sessionId") or "")).strip()
     table = str(data.get("table", "") or "")
+    status = normalize_status(data.get("status", "new"), "new")
+
     if not sid:
         emit("submit_result", {"ok": False, "msg": "missing sessionId"})
         return
@@ -795,7 +890,7 @@ def on_submit(data):
         emit("submit_result", {"ok": False, "msg": "cart empty"}, room=sid)
         return
 
-    result = submit_cart_create_or_merge_ticket(sid, table, cart)
+    result = submit_cart_create_or_merge_ticket(sid, table, cart, status=status)
     if not result:
         emit("submit_result", {"ok": False, "msg": "submit failed"}, room=sid)
         return
@@ -804,13 +899,16 @@ def on_submit(data):
     locks_in_room[sid] = {}
 
     order_detail = load_order_by_session(sid)
+    ticket_detail = load_ticket_by_id(result["ticketId"])
 
     emit("submit_result", {
         "ok": True,
-        "orderId": int(order_detail["id"]) if order_detail else result["orderId"],
-        "ticketId": result["ticketId"], # ticketId（更新狀態/出單用）
+        "orderId": int(ticket_detail["orderId"]) if ticket_detail else result["orderId"],
+        "ticketId": result["ticketId"],
         "batchNo": result["batchNo"],
         "merged": result["merged"],
+        "status": result["status"],
+        "order": ticket_detail,
     }, room=sid)
 
     socketio.emit(
@@ -855,13 +953,97 @@ def list_orders_api():
     return jsonify({"ok": True, "orders": tickets})
 
 
+# ================== REST: 建單（給 Android / Web） ==================
+def _parse_create_order_payload(data: dict):
+    data = data or {}
+    session_id = str(data.get("sessionId") or "").strip()
+    if not session_id:
+        session_id = create_unique_session_id()
+
+    table = str(data.get("tableNo") or data.get("table") or "").strip()
+    status = normalize_status(data.get("status", "new"), "new")
+
+    raw_items = data.get("items", [])
+    if not isinstance(raw_items, list):
+        raw_items = []
+
+    items = []
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        item = {
+            "lineId": raw.get("lineId") or uuid.uuid4().hex,
+            "name": str(raw.get("name", "")),
+            "enName": raw.get("enName"),
+            "price": int(raw.get("price", 0)),
+            "qty": max(1, int(raw.get("qty", 1))),
+            "remark": str(raw.get("remark", "") or ""),
+            "temp": raw.get("temp"),
+            "addOns": raw.get("addOns", []) or [],
+            "addedBy": str(raw.get("addedBy", "")).strip()[:20] or None,
+            "category": raw.get("category"),
+        }
+        items.append(normalize_cart_item(item))
+
+    items = dedupe_by_line_id(items)
+    total = int(data.get("total", calc_total(items)) or 0)
+
+    return session_id, table, status, items, total
+
+
+def _create_order_common():
+    data = request.get_json(silent=True) or {}
+    session_id, table, status, items, total = _parse_create_order_payload(data)
+
+    if not items:
+        return jsonify({"ok": False, "msg": "items empty"}), 400
+
+    result = submit_cart_create_or_merge_ticket(
+        session_id=session_id,
+        table=table,
+        cart=items,
+        status=status
+    )
+    if not result:
+        return jsonify({"ok": False, "msg": "create failed"}), 500
+
+    created_ticket = load_ticket_by_id(result["ticketId"])
+    if not created_ticket:
+        return jsonify({"ok": False, "msg": "ticket not found after create"}), 500
+
+    # 以 request total 為準時可自行調整；目前仍以實際 items 計算回傳
+    return jsonify({
+        "ok": True,
+        "id": created_ticket["id"],       # ticketId
+        "ticketId": created_ticket["id"],
+        "orderId": created_ticket["orderId"],
+        "batchNo": created_ticket["batchNo"],
+        "merged": result["merged"],
+        "status": created_ticket["status"],
+        "order": created_ticket,
+    })
+
+
+@app.route("/api/orders", methods=["POST"])
+def create_order_api():
+    return _create_order_common()
+
+
+@app.route("/api/order", methods=["POST"])
+def create_order_api2():
+    return _create_order_common()
+
+
+@app.route("/orders", methods=["POST"])
+def create_order_legacy():
+    return _create_order_common()
+
+
 # 更新 ticket 狀態（不是主訂單）
 @app.route("/api/orders/<int:ticket_id>/status", methods=["POST"])
 def update_order_status_api(ticket_id):
     data = request.get_json(silent=True) or {}
-    status = str(data.get("status", "")).strip().lower()
-    if status not in ORDER_STATUS_ALLOWED:
-        return jsonify({"ok": False, "msg": "invalid status"}), 400
+    status = normalize_status(data.get("status", "new"), "new")
 
     ok = update_ticket_status(ticket_id, status)
     if not ok:
