@@ -1,4 +1,6 @@
-import os
+from pathlib import Path
+
+code = r'''import os
 import json
 import time
 import uuid
@@ -162,6 +164,20 @@ def normalize_status(status: str, default: str = "new") -> str:
     return s if s in ORDER_STATUS_ALLOWED else default
 
 
+def normalize_addons(add_ons):
+    out = []
+    for a in add_ons or []:
+        if not isinstance(a, dict):
+            continue
+        out.append({
+            "key": a.get("key"),
+            "name": str(a.get("name", "")),
+            "enName": a.get("enName"),
+            "price": int(a.get("price", 0)),
+        })
+    return out
+
+
 def normalize_cart_item(item: dict) -> dict:
     item = item or {}
     return {
@@ -172,7 +188,7 @@ def normalize_cart_item(item: dict) -> dict:
         "qty": max(1, int(item.get("qty", 1))),
         "remark": str(item.get("remark", "")),
         "temp": item.get("temp"),
-        "addOns": item.get("addOns", []),
+        "addOns": normalize_addons(item.get("addOns", [])),
         "addedBy": str(item.get("addedBy", "")).strip()[:20] or None,
         "category": item.get("category"),
     }
@@ -198,6 +214,48 @@ def dedupe_by_line_id(items: list) -> list:
             seen.add(lid)
         out.append(it)
     return out
+
+
+def item_merge_key(item: dict) -> str:
+    it = normalize_cart_item(item if isinstance(item, dict) else {})
+    addons = sorted(
+        [f"{str(a.get('key') or a.get('name') or '')}:{int(a.get('price', 0))}" for a in it.get("addOns", [])],
+        key=lambda x: x
+    )
+    payload = {
+        "name": str(it.get("name", "")).strip(),
+        "price": int(it.get("price", 0)),
+        "temp": (it.get("temp") or "").strip() if isinstance(it.get("temp"), str) else it.get("temp"),
+        "remark": str(it.get("remark", "")).strip(),
+        "category": str(it.get("category", "")).strip() if it.get("category") is not None else "",
+        "addOns": addons,
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def merge_cart_items(items: list) -> list:
+    merged = []
+    index_by_key = {}
+
+    for raw in items or []:
+        it = normalize_cart_item(raw if isinstance(raw, dict) else {})
+        key = item_merge_key(it)
+
+        if key in index_by_key:
+            target = merged[index_by_key[key]]
+            target["qty"] = max(1, int(target.get("qty", 1))) + max(1, int(it.get("qty", 1)))
+        else:
+            merged.append(it)
+            index_by_key[key] = len(merged) - 1
+
+    return merged
+
+
+def normalize_and_merge_items(items: list) -> list:
+    normalized = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in (items or [])]
+    deduped = dedupe_by_line_id(normalized)
+    merged = merge_cart_items(deduped)
+    return merged
 
 
 # ================== Call State ==================
@@ -306,13 +364,14 @@ def get_session_cart(session_id):
     if not row:
         return []
     try:
-        return json.loads(row[0])
+        raw = json.loads(row[0])
     except Exception:
-        return []
+        raw = []
+    return normalize_and_merge_items(raw)
 
 
 def save_session_cart(session_id, cart):
-    cart = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in (cart or [])]
+    cart = normalize_and_merge_items(cart)
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("""
@@ -387,7 +446,7 @@ def _create_order_header(session_id: str, table: str, status: str = "new") -> in
 
 
 def _append_items_to_header(order_id: int, table: str, new_items: list, status: str | None = None):
-    new_items = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in (new_items or [])]
+    new_items = normalize_and_merge_items(new_items)
     if not new_items:
         return
 
@@ -397,9 +456,7 @@ def _append_items_to_header(order_id: int, table: str, new_items: list, status: 
         row = c.fetchone()
         old_items = json.loads(row[0] or "[]") if row else []
 
-        merged = (old_items or []) + new_items
-        merged = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in merged]
-        merged = dedupe_by_line_id(merged)
+        merged = normalize_and_merge_items((old_items or []) + new_items)
 
         if status and normalize_status(status, "new") != "new":
             c.execute("""
@@ -451,6 +508,8 @@ def _get_next_batch_no(order_id: int) -> int:
 
 def _create_ticket(order_id: int, session_id: str, table: str, items: list, batch_no: int, status: str = "new") -> int:
     status = normalize_status(status, "new")
+    merged_items = normalize_and_merge_items(items)
+
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("""
@@ -461,7 +520,7 @@ def _create_ticket(order_id: int, session_id: str, table: str, items: list, batc
             session_id,
             table or "",
             now_str(),
-            json.dumps(items, ensure_ascii=False),
+            json.dumps(merged_items, ensure_ascii=False),
             status,
             int(batch_no)
         ))
@@ -470,8 +529,7 @@ def _create_ticket(order_id: int, session_id: str, table: str, items: list, batc
 
 
 def _merge_into_ticket(ticket_id: int, merged_items: list):
-    merged_items = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in (merged_items or [])]
-    merged_items = dedupe_by_line_id(merged_items)
+    merged_items = normalize_and_merge_items(merged_items)
 
     with get_conn() as conn:
         c = conn.cursor()
@@ -502,8 +560,7 @@ def get_or_create_order_id_for_session(session_id: str, table: str, status: str 
 
 def submit_cart_create_or_merge_ticket(session_id: str, table: str, cart: list, status: str = "new"):
     status = normalize_status(status, "new")
-    cart_items = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in (cart or [])]
-    cart_items = dedupe_by_line_id(cart_items)
+    cart_items = normalize_and_merge_items(cart)
     if not cart_items:
         return None
 
@@ -521,7 +578,7 @@ def submit_cart_create_or_merge_ticket(session_id: str, table: str, cart: list, 
                 old_items = json.loads(old_items_json or "[]")
             except Exception:
                 old_items = []
-            merged = (old_items or []) + cart_items
+            merged = normalize_and_merge_items((old_items or []) + cart_items)
             _merge_into_ticket(ticket_id, merged)
             return {
                 "orderId": order_id,
@@ -565,9 +622,12 @@ def load_order_by_session(session_id):
         return None
 
     oid, table, t, items, status, sid = row
-    items = json.loads(items) if items else []
-    items = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in items]
-    items = dedupe_by_line_id(items)
+    try:
+        items = json.loads(items) if items else []
+    except Exception:
+        items = []
+
+    items = normalize_and_merge_items(items)
 
     return {
         "id": get_daily_order_no(int(oid), t),
@@ -604,9 +664,12 @@ def load_ticket_by_id(ticket_id: int):
         return None
 
     ticket_id, order_id, sid, table, t, items, status, batch_no = row
-    items_list = json.loads(items) if items else []
-    items_list = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in items_list]
-    items_list = dedupe_by_line_id(items_list)
+    try:
+        items_list = json.loads(items) if items else []
+    except Exception:
+        items_list = []
+
+    items_list = normalize_and_merge_items(items_list)
 
     return {
         "id": int(ticket_id),  # ticketId
@@ -644,9 +707,12 @@ def load_all_tickets(limit=200):
 
     out = []
     for ticket_id, order_id, sid, table, t, items, status, batch_no in rows:
-        items_list = json.loads(items) if items else []
-        items_list = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in items_list]
-        items_list = dedupe_by_line_id(items_list)
+        try:
+            items_list = json.loads(items) if items else []
+        except Exception:
+            items_list = []
+
+        items_list = normalize_and_merge_items(items_list)
 
         out.append({
             "id": int(ticket_id),  # ticketId（更新狀態用）
@@ -985,7 +1051,7 @@ def _parse_create_order_payload(data: dict):
         }
         items.append(normalize_cart_item(item))
 
-    items = dedupe_by_line_id(items)
+    items = normalize_and_merge_items(items)
     total = int(data.get("total", calc_total(items)) or 0)
 
     return session_id, table, status, items, total
@@ -1250,3 +1316,7 @@ def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     socketio.run(app, host="0.0.0.0", port=port)
+'''
+path = Path('/mnt/data/app_merged.py')
+path.write_text(code, encoding='utf-8')
+print(path)
