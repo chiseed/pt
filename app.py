@@ -74,7 +74,8 @@ def init_db():
             table_num TEXT,
             time TEXT,
             items TEXT,
-            status TEXT DEFAULT 'new'
+            status TEXT DEFAULT 'new',
+            daily_no INTEGER DEFAULT 0
         )""")
 
         c.execute("""
@@ -101,6 +102,10 @@ def init_db():
 
         if not _col_exists(conn, "sessions", "order_id"):
             c.execute("ALTER TABLE sessions ADD COLUMN order_id INTEGER")
+            conn.commit()
+
+        if not _col_exists(conn, "orders", "daily_no"):
+            c.execute("ALTER TABLE orders ADD COLUMN daily_no INTEGER DEFAULT 0")
             conn.commit()
 
         c.execute("""
@@ -198,6 +203,26 @@ def dedupe_by_line_id(items: list) -> list:
             seen.add(lid)
         out.append(it)
     return out
+
+
+def get_next_daily_no(order_time: str) -> int:
+    try:
+        day_str = str(order_time or "")[:10]
+        if not day_str:
+            return 1
+
+        with get_conn() as conn:
+            c = conn.cursor()
+            c.execute("""
+                SELECT COALESCE(MAX(daily_no), 0)
+                FROM orders
+                WHERE substr(time, 1, 10) = ?
+            """, (day_str,))
+            row = c.fetchone()
+
+        return int(row[0] or 0) + 1
+    except Exception:
+        return 1
 
 
 # ================== Call State ==================
@@ -376,12 +401,15 @@ def get_daily_order_no(order_id: int, order_time: str) -> int:
 
 def _create_order_header(session_id: str, table: str, status: str = "new") -> int:
     status = normalize_status(status, "new")
+    order_time = now_str()
+    daily_no = get_next_daily_no(order_time)
+
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("""
-            INSERT INTO orders (session_id, table_num, time, items, status)
-            VALUES (?, ?, ?, ?, ?)
-        """, (session_id, table or "", now_str(), "[]", status))
+            INSERT INTO orders (session_id, table_num, time, items, status, daily_no)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (session_id, table or "", order_time, "[]", status, daily_no))
         conn.commit()
         return int(c.lastrowid)
 
@@ -554,7 +582,7 @@ def load_order_by_session(session_id):
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("""
-            SELECT id, table_num, time, items, status, session_id
+            SELECT id, table_num, time, items, status, session_id, daily_no
             FROM orders
             WHERE id=?
             LIMIT 1
@@ -564,13 +592,15 @@ def load_order_by_session(session_id):
     if not row:
         return None
 
-    oid, table, t, items, status, sid = row
+    oid, table, t, items, status, sid, daily_no = row
     items = json.loads(items) if items else []
     items = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in items]
     items = dedupe_by_line_id(items)
 
     return {
-        "id": get_daily_order_no(int(oid), t),
+        "id": int(oid),
+        "orderId": get_daily_order_no(int(oid), t),
+        "dailyNo": int(daily_no or 0),
         "sessionId": sid,
         "tableNo": table,
         "time": t,
@@ -593,8 +623,10 @@ def load_ticket_by_id(ticket_id: int):
                 t.time,
                 t.items,
                 t.status,
-                t.batch_no
+                t.batch_no,
+                o.daily_no
             FROM order_tickets t
+            LEFT JOIN orders o ON t.order_id = o.id
             WHERE t.id = ?
             LIMIT 1
         """, (int(ticket_id),))
@@ -603,7 +635,7 @@ def load_ticket_by_id(ticket_id: int):
     if not row:
         return None
 
-    ticket_id, order_id, sid, table, t, items, status, batch_no = row
+    ticket_id, order_id, sid, table, t, items, status, batch_no, daily_no = row
     items_list = json.loads(items) if items else []
     items_list = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in items_list]
     items_list = dedupe_by_line_id(items_list)
@@ -611,6 +643,7 @@ def load_ticket_by_id(ticket_id: int):
     return {
         "id": int(ticket_id),  # ticketId
         "orderId": get_daily_order_no(int(order_id), t),
+        "dailyNo": int(daily_no or 0),
         "batchNo": int(batch_no or 1),
         "sessionId": sid,
         "tableNo": table,
@@ -635,15 +668,17 @@ def load_all_tickets(limit=200):
                 t.time,
                 t.items,
                 t.status,
-                t.batch_no
+                t.batch_no,
+                o.daily_no
             FROM order_tickets t
+            LEFT JOIN orders o ON t.order_id = o.id
             ORDER BY t.id DESC
             LIMIT ?
         """, (limit,))
         rows = c.fetchall()
 
     out = []
-    for ticket_id, order_id, sid, table, t, items, status, batch_no in rows:
+    for ticket_id, order_id, sid, table, t, items, status, batch_no, daily_no in rows:
         items_list = json.loads(items) if items else []
         items_list = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in items_list]
         items_list = dedupe_by_line_id(items_list)
@@ -651,6 +686,7 @@ def load_all_tickets(limit=200):
         out.append({
             "id": int(ticket_id),  # ticketId（更新狀態用）
             "orderId": get_daily_order_no(int(order_id), t),
+            "dailyNo": int(daily_no or 0),
             "batchNo": int(batch_no or 1),
             "sessionId": sid,
             "tableNo": table,
@@ -1011,12 +1047,12 @@ def _create_order_common():
     if not created_ticket:
         return jsonify({"ok": False, "msg": "ticket not found after create"}), 500
 
-    # 以 request total 為準時可自行調整；目前仍以實際 items 計算回傳
     return jsonify({
         "ok": True,
         "id": created_ticket["id"],       # ticketId
         "ticketId": created_ticket["id"],
         "orderId": created_ticket["orderId"],
+        "dailyNo": created_ticket["dailyNo"],
         "batchNo": created_ticket["batchNo"],
         "merged": result["merged"],
         "status": created_ticket["status"],
