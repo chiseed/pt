@@ -205,7 +205,7 @@ def dedupe_by_line_id(items: list) -> list:
     return out
 
 
-def get_next_ticket_daily_no(ticket_time: str) -> int:
+def get_next_print_daily_no(ticket_time: str) -> int:
     try:
         day_str = str(ticket_time or "")[:10]
         if not day_str:
@@ -223,6 +223,38 @@ def get_next_ticket_daily_no(ticket_time: str) -> int:
         return int(row[0] or 0) + 1
     except Exception:
         return 1
+
+
+def assign_daily_no_when_done(ticket_id: int) -> int:
+    with get_conn() as conn:
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT time, daily_no
+            FROM order_tickets
+            WHERE id = ?
+            LIMIT 1
+        """, (int(ticket_id),))
+        row = c.fetchone()
+
+        if not row:
+            return 0
+
+        ticket_time, current_daily_no = row
+
+        if int(current_daily_no or 0) > 0:
+            return int(current_daily_no)
+
+        next_no = get_next_print_daily_no(ticket_time)
+
+        c.execute("""
+            UPDATE order_tickets
+            SET daily_no = ?
+            WHERE id = ?
+        """, (int(next_no), int(ticket_id)))
+        conn.commit()
+
+        return int(next_no)
 
 
 # ================== Call State ==================
@@ -477,7 +509,6 @@ def _get_next_batch_no(order_id: int) -> int:
 def _create_ticket(order_id: int, session_id: str, table: str, items: list, batch_no: int, status: str = "new") -> int:
     status = normalize_status(status, "new")
     ticket_time = now_str()
-    ticket_daily_no = get_next_ticket_daily_no(ticket_time)
 
     with get_conn() as conn:
         c = conn.cursor()
@@ -492,7 +523,7 @@ def _create_ticket(order_id: int, session_id: str, table: str, items: list, batc
             json.dumps(items, ensure_ascii=False),
             status,
             int(batch_no),
-            int(ticket_daily_no)
+            0
         ))
         conn.commit()
         return int(c.lastrowid)
@@ -560,7 +591,6 @@ def submit_cart_create_or_merge_ticket(session_id: str, table: str, cart: list, 
                 "status": "new",
             }
 
-    # done / making / cancelled 或沒有 open new ticket，就直接新建一張對應狀態的 ticket
     batch_no = _get_next_batch_no(order_id)
     ticket_id = _create_ticket(order_id, session_id, table, cart_items, batch_no, status=status)
     return {
@@ -641,7 +671,7 @@ def load_ticket_by_id(ticket_id: int):
     items_list = dedupe_by_line_id(items_list)
 
     return {
-        "id": int(ticket_id),  # ticketId
+        "id": int(ticket_id),
         "orderId": get_daily_order_no(int(order_id), t),
         "dailyNo": int(daily_no or 0),
         "batchNo": int(batch_no or 1),
@@ -683,7 +713,7 @@ def load_all_tickets(limit=200):
         items_list = dedupe_by_line_id(items_list)
 
         out.append({
-            "id": int(ticket_id),  # ticketId（更新狀態用）
+            "id": int(ticket_id),
             "orderId": get_daily_order_no(int(order_id), t),
             "dailyNo": int(daily_no or 0),
             "batchNo": int(batch_no or 1),
@@ -700,13 +730,13 @@ def load_all_tickets(limit=200):
 
 def update_ticket_status(ticket_id: int, status: str) -> bool:
     status = normalize_status(status, "new")
+
     with get_conn() as conn:
         c = conn.cursor()
 
         c.execute("UPDATE order_tickets SET status=? WHERE id=?", (status, int(ticket_id)))
         ok = c.rowcount > 0
 
-        # 同步主訂單狀態為最近一次變更
         if ok:
             c.execute("SELECT order_id FROM order_tickets WHERE id=?", (int(ticket_id),))
             row = c.fetchone()
@@ -714,7 +744,14 @@ def update_ticket_status(ticket_id: int, status: str) -> bool:
                 c.execute("UPDATE orders SET status=?, time=? WHERE id=?", (status, now_str(), int(row[0])))
 
         conn.commit()
-        return ok
+
+    if not ok:
+        return False
+
+    if status == "done":
+        assign_daily_no_when_done(ticket_id)
+
+    return True
 
 
 def get_session_id_by_ticket_id(ticket_id: int):
@@ -1048,7 +1085,7 @@ def _create_order_common():
 
     return jsonify({
         "ok": True,
-        "id": created_ticket["id"],       # ticketId
+        "id": created_ticket["id"],
         "ticketId": created_ticket["id"],
         "orderId": created_ticket["orderId"],
         "dailyNo": created_ticket["dailyNo"],
