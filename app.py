@@ -74,8 +74,7 @@ def init_db():
             table_num TEXT,
             time TEXT,
             items TEXT,
-            status TEXT DEFAULT 'new',
-            daily_no INTEGER DEFAULT 0
+            status TEXT DEFAULT 'new'
         )""")
 
         c.execute("""
@@ -88,6 +87,7 @@ def init_db():
             items TEXT,
             status TEXT DEFAULT 'new',
             batch_no INTEGER DEFAULT 1,
+            daily_no INTEGER DEFAULT 0,
             FOREIGN KEY(order_id) REFERENCES orders(id)
         )""")
 
@@ -104,8 +104,8 @@ def init_db():
             c.execute("ALTER TABLE sessions ADD COLUMN order_id INTEGER")
             conn.commit()
 
-        if not _col_exists(conn, "orders", "daily_no"):
-            c.execute("ALTER TABLE orders ADD COLUMN daily_no INTEGER DEFAULT 0")
+        if not _col_exists(conn, "order_tickets", "daily_no"):
+            c.execute("ALTER TABLE order_tickets ADD COLUMN daily_no INTEGER DEFAULT 0")
             conn.commit()
 
         c.execute("""
@@ -205,9 +205,9 @@ def dedupe_by_line_id(items: list) -> list:
     return out
 
 
-def get_next_daily_no(order_time: str) -> int:
+def get_next_ticket_daily_no(ticket_time: str) -> int:
     try:
-        day_str = str(order_time or "")[:10]
+        day_str = str(ticket_time or "")[:10]
         if not day_str:
             return 1
 
@@ -215,7 +215,7 @@ def get_next_daily_no(order_time: str) -> int:
             c = conn.cursor()
             c.execute("""
                 SELECT COALESCE(MAX(daily_no), 0)
-                FROM orders
+                FROM order_tickets
                 WHERE substr(time, 1, 10) = ?
             """, (day_str,))
             row = c.fetchone()
@@ -401,15 +401,12 @@ def get_daily_order_no(order_id: int, order_time: str) -> int:
 
 def _create_order_header(session_id: str, table: str, status: str = "new") -> int:
     status = normalize_status(status, "new")
-    order_time = now_str()
-    daily_no = get_next_daily_no(order_time)
-
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("""
-            INSERT INTO orders (session_id, table_num, time, items, status, daily_no)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (session_id, table or "", order_time, "[]", status, daily_no))
+            INSERT INTO orders (session_id, table_num, time, items, status)
+            VALUES (?, ?, ?, ?, ?)
+        """, (session_id, table or "", now_str(), "[]", status))
         conn.commit()
         return int(c.lastrowid)
 
@@ -479,19 +476,23 @@ def _get_next_batch_no(order_id: int) -> int:
 
 def _create_ticket(order_id: int, session_id: str, table: str, items: list, batch_no: int, status: str = "new") -> int:
     status = normalize_status(status, "new")
+    ticket_time = now_str()
+    ticket_daily_no = get_next_ticket_daily_no(ticket_time)
+
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("""
-            INSERT INTO order_tickets (order_id, session_id, table_num, time, items, status, batch_no)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO order_tickets (order_id, session_id, table_num, time, items, status, batch_no, daily_no)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             int(order_id),
             session_id,
             table or "",
-            now_str(),
+            ticket_time,
             json.dumps(items, ensure_ascii=False),
             status,
-            int(batch_no)
+            int(batch_no),
+            int(ticket_daily_no)
         ))
         conn.commit()
         return int(c.lastrowid)
@@ -582,7 +583,7 @@ def load_order_by_session(session_id):
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("""
-            SELECT id, table_num, time, items, status, session_id, daily_no
+            SELECT id, table_num, time, items, status, session_id
             FROM orders
             WHERE id=?
             LIMIT 1
@@ -592,7 +593,7 @@ def load_order_by_session(session_id):
     if not row:
         return None
 
-    oid, table, t, items, status, sid, daily_no = row
+    oid, table, t, items, status, sid = row
     items = json.loads(items) if items else []
     items = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in items]
     items = dedupe_by_line_id(items)
@@ -600,7 +601,7 @@ def load_order_by_session(session_id):
     return {
         "id": int(oid),
         "orderId": get_daily_order_no(int(oid), t),
-        "dailyNo": int(daily_no or 0),
+        "dailyNo": None,
         "sessionId": sid,
         "tableNo": table,
         "time": t,
@@ -624,9 +625,8 @@ def load_ticket_by_id(ticket_id: int):
                 t.items,
                 t.status,
                 t.batch_no,
-                o.daily_no
+                t.daily_no
             FROM order_tickets t
-            LEFT JOIN orders o ON t.order_id = o.id
             WHERE t.id = ?
             LIMIT 1
         """, (int(ticket_id),))
@@ -669,9 +669,8 @@ def load_all_tickets(limit=200):
                 t.items,
                 t.status,
                 t.batch_no,
-                o.daily_no
+                t.daily_no
             FROM order_tickets t
-            LEFT JOIN orders o ON t.order_id = o.id
             ORDER BY t.id DESC
             LIMIT ?
         """, (limit,))
