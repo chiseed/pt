@@ -23,6 +23,7 @@ from flask_socketio import SocketIO, join_room, emit
 app = Flask(__name__)
 
 ALLOWED_ORIGINS = [
+    "https://partnertake.netlify.app",
     "https://partnerburger.netlify.app",
     "https://illustrious-centaur-327b59.netlify.app",
     "https://silly-marzipan-9f27a5.netlify.app",
