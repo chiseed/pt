@@ -51,7 +51,6 @@ SESSION_TTL_SECONDS = 24 * 60 * 60
 ORDER_STATUS_ALLOWED = {"new", "making", "done", "cancelled"}
 LINE_CHANNEL_ID = os.environ.get("LINE_CHANNEL_ID", "").strip()
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
-QUEUE_PREFIX = os.environ.get("QUEUE_PREFIX", "A").strip().upper() or "A"
 
 
 # ================== DB ==================
@@ -212,20 +211,23 @@ def mask_phone(phone: str) -> str:
     return raw[:3] + "****" + raw[-3:]
 
 
+def normalize_phone(phone: str) -> str:
+    return "".join(ch for ch in str(phone or "").strip() if ch.isdigit())
+
+
 def normalize_ticket_no(ticket_no: str) -> str:
     raw = str(ticket_no or "").strip().upper()
     if not raw:
         return ""
 
-    prefix = "".join(ch for ch in raw if ch.isalpha()) or QUEUE_PREFIX
     digits = "".join(ch for ch in raw if ch.isdigit())
     if not digits:
         return ""
-    return f"{prefix}{int(digits):03d}"
+    return f"{int(digits):03d}"
 
 
 def make_queue_no(n: int) -> str:
-    return f"{QUEUE_PREFIX}{int(n):03d}"
+    return f"{int(n):03d}"
 
 
 def get_next_queue_no() -> str:
@@ -233,11 +235,10 @@ def get_next_queue_no() -> str:
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("""
-            SELECT COALESCE(MAX(CAST(SUBSTR(no, 2) AS INTEGER)), 0)
+            SELECT COALESCE(MAX(CAST(no AS INTEGER)), 0)
             FROM queue_tickets
             WHERE SUBSTR(created_at, 1, 10) = ?
-              AND SUBSTR(no, 1, 1) = ?
-        """, (day, QUEUE_PREFIX))
+        """, (day,))
         row = c.fetchone()
     return make_queue_no(int(row[0] or 0) + 1)
 
@@ -274,6 +275,44 @@ def get_queue_ticket_by_no(ticket_no: str):
         """, (normalized,))
         row = c.fetchone()
     return serialize_queue_ticket(row)
+
+
+def find_queue_ticket_for_binding(ticket_no: str, surname: str = "", party_size: int = 0, phone: str = ""):
+    exact = get_queue_ticket_by_no(ticket_no)
+    if exact:
+        return exact
+
+    phone_norm = normalize_phone(phone)
+    surname = str(surname or "").strip()
+    party_size = int(party_size or 0)
+    if not phone_norm:
+        return None
+
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, no, surname, party_size, phone, status, created_at, called_at, updated_at
+            FROM queue_tickets
+            WHERE SUBSTR(created_at, 1, 10) = ?
+              AND status IN ('waiting', 'called', 'passed')
+            ORDER BY id DESC
+        """, (today_str(),))
+        rows = c.fetchall()
+
+    matches = []
+    for row in rows:
+        ticket = serialize_queue_ticket(row)
+        if normalize_phone(ticket.get("phone", "")) != phone_norm:
+            continue
+        if surname and str(ticket.get("surname", "")).strip() != surname:
+            continue
+        if party_size > 0 and int(ticket.get("party_size", 0) or 0) != party_size:
+            continue
+        matches.append(ticket)
+
+    if len(matches) == 1:
+        return matches[0]
+    return None
 
 
 def get_current_called_ticket():
@@ -1628,6 +1667,14 @@ def api_queue_take_ticket():
     return jsonify(ticket)
 
 
+@app.route("/api/tickets/<ticket_no>", methods=["GET"])
+def api_queue_ticket_detail(ticket_no):
+    ticket = get_queue_ticket_by_no(ticket_no)
+    if not ticket:
+        return jsonify({"ok": False, "detail": "ticket not found"}), 404
+    return jsonify({"ok": True, "ticket": ticket})
+
+
 @app.route("/api/admin/tickets", methods=["POST"])
 def api_admin_create_ticket():
     return api_queue_take_ticket()
@@ -1676,12 +1723,25 @@ def api_admin_clear():
 def api_line_bind_ticket():
     data = request.get_json(silent=True) or {}
     ticket_no = normalize_ticket_no(data.get("ticket_no", ""))
+    surname = str(data.get("surname", "")).strip()
+    party_size = int(data.get("party_size", 0) or 0)
+    phone = str(data.get("phone", "")).strip()
+
     if not ticket_no:
         return jsonify({"ok": False, "detail": "ticket_no required"}), 400
 
-    ticket = get_queue_ticket_by_no(ticket_no)
+    ticket = find_queue_ticket_for_binding(
+        ticket_no=ticket_no,
+        surname=surname,
+        party_size=party_size,
+        phone=phone,
+    )
     if not ticket:
-        return jsonify({"ok": False, "detail": "ticket not found"}), 404
+        return jsonify({
+            "ok": False,
+            "detail": "ticket not found",
+            "ticket_no": ticket_no,
+        }), 404
 
     try:
         user = verify_line_user(
@@ -1695,10 +1755,10 @@ def api_line_bind_ticket():
         return jsonify({"ok": False, "detail": "LINE user not found"}), 400
 
     updated_ticket = bind_line_to_ticket(
-        ticket_no=ticket_no,
-        surname=str(data.get("surname", "")).strip(),
-        party_size=int(data.get("party_size", 0) or 0),
-        phone=str(data.get("phone", "")).strip(),
+        ticket_no=ticket["no"],
+        surname=surname,
+        party_size=party_size,
+        phone=phone,
         line_user_id=user["user_id"],
         line_display_name=user.get("display_name", ""),
         id_token_sub=user.get("sub", ""),
