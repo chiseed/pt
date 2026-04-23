@@ -5,6 +5,9 @@ import uuid
 import sqlite3
 import datetime
 import random
+import urllib.parse
+import urllib.request
+import urllib.error
 
 import eventlet
 eventlet.monkey_patch()
@@ -45,6 +48,9 @@ socketio = SocketIO(
 DB_FILE = "orders.db"
 SESSION_TTL_SECONDS = 24 * 60 * 60
 ORDER_STATUS_ALLOWED = {"new", "making", "done", "cancelled"}
+LINE_CHANNEL_ID = os.environ.get("LINE_CHANNEL_ID", "").strip()
+LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
+QUEUE_PREFIX = os.environ.get("QUEUE_PREFIX", "A").strip().upper() or "A"
 
 
 # ================== DB ==================
@@ -135,6 +141,33 @@ def init_db():
             updated_at TEXT
         )""")
 
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS queue_tickets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            no TEXT NOT NULL UNIQUE,
+            surname TEXT DEFAULT '',
+            party_size INTEGER DEFAULT 0,
+            phone TEXT DEFAULT '',
+            status TEXT DEFAULT 'waiting',
+            created_at TEXT NOT NULL,
+            called_at TEXT DEFAULT '',
+            updated_at TEXT NOT NULL
+        )""")
+
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS queue_line_bindings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticket_id INTEGER NOT NULL,
+            ticket_no TEXT NOT NULL UNIQUE,
+            line_user_id TEXT NOT NULL,
+            line_display_name TEXT DEFAULT '',
+            id_token_sub TEXT DEFAULT '',
+            bound_at TEXT NOT NULL,
+            notified_at TEXT DEFAULT '',
+            notify_status TEXT DEFAULT '',
+            FOREIGN KEY(ticket_id) REFERENCES queue_tickets(id)
+        )""")
+
         conn.commit()
 
 
@@ -165,6 +198,346 @@ def to_ts_ms(s):
 def normalize_status(status: str, default: str = "new") -> str:
     s = str(status or default).strip().lower()
     return s if s in ORDER_STATUS_ALLOWED else default
+
+
+def today_str():
+    return now_dt().strftime("%Y-%m-%d")
+
+
+def mask_phone(phone: str) -> str:
+    raw = str(phone or "").strip()
+    if len(raw) <= 4:
+        return raw
+    return raw[:3] + "****" + raw[-3:]
+
+
+def normalize_ticket_no(ticket_no: str) -> str:
+    raw = str(ticket_no or "").strip().upper()
+    if not raw:
+        return ""
+
+    prefix = "".join(ch for ch in raw if ch.isalpha()) or QUEUE_PREFIX
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if not digits:
+        return ""
+    return f"{prefix}{int(digits):03d}"
+
+
+def make_queue_no(n: int) -> str:
+    return f"{QUEUE_PREFIX}{int(n):03d}"
+
+
+def get_next_queue_no() -> str:
+    day = today_str()
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("""
+            SELECT COALESCE(MAX(CAST(SUBSTR(no, 2) AS INTEGER)), 0)
+            FROM queue_tickets
+            WHERE SUBSTR(created_at, 1, 10) = ?
+              AND SUBSTR(no, 1, 1) = ?
+        """, (day, QUEUE_PREFIX))
+        row = c.fetchone()
+    return make_queue_no(int(row[0] or 0) + 1)
+
+
+def serialize_queue_ticket(row):
+    if not row:
+        return None
+
+    return {
+        "id": int(row[0]),
+        "no": row[1],
+        "surname": row[2] or "",
+        "party_size": int(row[3] or 0),
+        "phone": row[4] or "",
+        "status": row[5] or "waiting",
+        "created_at": row[6] or "",
+        "called_at": row[7] or "",
+        "updated_at": row[8] or "",
+    }
+
+
+def get_queue_ticket_by_no(ticket_no: str):
+    normalized = normalize_ticket_no(ticket_no)
+    if not normalized:
+        return None
+
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, no, surname, party_size, phone, status, created_at, called_at, updated_at
+            FROM queue_tickets
+            WHERE no = ?
+            LIMIT 1
+        """, (normalized,))
+        row = c.fetchone()
+    return serialize_queue_ticket(row)
+
+
+def get_current_called_ticket():
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, no, surname, party_size, phone, status, created_at, called_at, updated_at
+            FROM queue_tickets
+            WHERE status = 'called'
+            ORDER BY datetime(called_at) DESC, id DESC
+            LIMIT 1
+        """)
+        row = c.fetchone()
+    return serialize_queue_ticket(row)
+
+
+def get_waiting_queue():
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, no, surname, party_size, phone, status, created_at, called_at, updated_at
+            FROM queue_tickets
+            WHERE status = 'waiting'
+            ORDER BY id ASC
+        """)
+        rows = c.fetchall()
+    return [serialize_queue_ticket(row) for row in rows]
+
+
+def get_waiting_count() -> int:
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM queue_tickets WHERE status = 'waiting'")
+        row = c.fetchone()
+    return int(row[0] or 0)
+
+
+def create_queue_ticket(surname: str, party_size: int, phone: str):
+    surname = str(surname or "").strip()
+    phone = str(phone or "").strip()
+    party_size = max(1, int(party_size or 1))
+    created = now_str()
+    ticket_no = get_next_queue_no()
+
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO queue_tickets (no, surname, party_size, phone, status, created_at, called_at, updated_at)
+            VALUES (?, ?, ?, ?, 'waiting', ?, '', ?)
+        """, (ticket_no, surname, party_size, phone, created, created))
+        ticket_id = int(c.lastrowid)
+        conn.commit()
+
+    return get_queue_ticket_by_no(ticket_no)
+
+
+def call_next_queue_ticket():
+    called_at = now_str()
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, no
+            FROM queue_tickets
+            WHERE status = 'waiting'
+            ORDER BY id ASC
+            LIMIT 1
+        """)
+        row = c.fetchone()
+        if not row:
+            return None
+
+        ticket_id = int(row[0])
+        c.execute("UPDATE queue_tickets SET status='passed', updated_at=? WHERE status='called'", (called_at,))
+        c.execute("""
+            UPDATE queue_tickets
+            SET status='called', called_at=?, updated_at=?
+            WHERE id=?
+        """, (called_at, called_at, ticket_id))
+        conn.commit()
+
+    ticket = get_queue_ticket_by_no(row[1])
+    if ticket:
+        set_call_code(ticket["no"])
+        notify_called_ticket(ticket)
+    return ticket
+
+
+def clear_queue_today():
+    now_value = now_str()
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("""
+            UPDATE queue_tickets
+            SET status='cleared', updated_at=?
+            WHERE status IN ('waiting', 'called', 'passed')
+        """, (now_value,))
+        c.execute("""
+            UPDATE queue_line_bindings
+            SET notify_status = CASE
+                WHEN notify_status = '' THEN 'queue_cleared'
+                ELSE notify_status
+            END
+        """)
+        conn.commit()
+    set_call_code("")
+
+
+def line_request(url: str, method: str = "GET", headers=None, body=None, form=False):
+    headers = headers or {}
+    data = None
+
+    if body is not None:
+        if form:
+            data = urllib.parse.urlencode(body).encode("utf-8")
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+        else:
+            data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        payload = resp.read().decode("utf-8")
+        return json.loads(payload) if payload else {}
+
+
+def verify_line_user(line_id_token: str = "", line_access_token: str = ""):
+    if line_access_token:
+        verify = line_request(
+            "https://api.line.me/oauth2/v2.1/verify?access_token=" + urllib.parse.quote(line_access_token),
+            "GET",
+        )
+        if LINE_CHANNEL_ID and str(verify.get("client_id", "")) != LINE_CHANNEL_ID:
+            raise ValueError("LINE access token channel_id 不符合")
+
+        profile = line_request(
+            "https://api.line.me/v2/profile",
+            "GET",
+            headers={"Authorization": f"Bearer {line_access_token}"},
+        )
+        return {
+            "user_id": profile.get("userId", ""),
+            "display_name": profile.get("displayName", ""),
+            "sub": profile.get("userId", ""),
+        }
+
+    if line_id_token:
+        if not LINE_CHANNEL_ID:
+            raise ValueError("後端尚未設定 LINE_CHANNEL_ID")
+        verify = line_request(
+            "https://api.line.me/oauth2/v2.1/verify",
+            "POST",
+            body={"id_token": line_id_token, "client_id": LINE_CHANNEL_ID},
+            form=True,
+        )
+        return {
+            "user_id": verify.get("sub", ""),
+            "display_name": verify.get("name", ""),
+            "sub": verify.get("sub", ""),
+        }
+
+    raise ValueError("缺少 LINE token")
+
+
+def send_line_push_message(user_id: str, text: str):
+    if not LINE_CHANNEL_ACCESS_TOKEN:
+        raise ValueError("後端尚未設定 LINE_CHANNEL_ACCESS_TOKEN")
+
+    return line_request(
+        "https://api.line.me/v2/bot/message/push",
+        "POST",
+        headers={"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"},
+        body={
+            "to": user_id,
+            "messages": [
+                {
+                    "type": "text",
+                    "text": text,
+                }
+            ]
+        }
+    )
+
+
+def bind_line_to_ticket(ticket_no: str, surname: str, party_size: int, phone: str, line_user_id: str, line_display_name: str = "", id_token_sub: str = ""):
+    ticket = get_queue_ticket_by_no(ticket_no)
+    if not ticket:
+        return None
+
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("""
+            UPDATE queue_tickets
+            SET surname = CASE WHEN surname = '' THEN ? ELSE surname END,
+                party_size = CASE WHEN party_size <= 0 THEN ? ELSE party_size END,
+                phone = CASE WHEN phone = '' THEN ? ELSE phone END,
+                updated_at = ?
+            WHERE id = ?
+        """, (surname or "", int(party_size or 0), phone or "", now_str(), int(ticket["id"])))
+
+        c.execute("""
+            INSERT INTO queue_line_bindings (
+                ticket_id, ticket_no, line_user_id, line_display_name, id_token_sub, bound_at, notified_at, notify_status
+            ) VALUES (?, ?, ?, ?, ?, ?, '', '')
+            ON CONFLICT(ticket_no) DO UPDATE SET
+                ticket_id = excluded.ticket_id,
+                line_user_id = excluded.line_user_id,
+                line_display_name = excluded.line_display_name,
+                id_token_sub = excluded.id_token_sub,
+                bound_at = excluded.bound_at
+        """, (
+            int(ticket["id"]),
+            ticket["no"],
+            line_user_id,
+            line_display_name or "",
+            id_token_sub or "",
+            now_str(),
+        ))
+        conn.commit()
+
+    return get_queue_ticket_by_no(ticket["no"])
+
+
+def notify_called_ticket(ticket: dict, force: bool = False):
+    if not ticket or not ticket.get("no"):
+        return {"ok": False, "msg": "missing ticket"}
+
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, line_user_id, notify_status
+            FROM queue_line_bindings
+            WHERE ticket_no = ?
+            LIMIT 1
+        """, (ticket["no"],))
+        row = c.fetchone()
+
+        if not row:
+            return {"ok": False, "msg": "not bound"}
+
+        binding_id = int(row[0])
+        line_user_id = row[1] or ""
+        notify_status = row[2] or ""
+
+        if notify_status == "sent" and not force:
+            return {"ok": True, "msg": "already sent"}
+
+        text = f"您好，現在叫到您的號碼 {ticket['no']}，請準備回到現場。"
+
+        try:
+            send_line_push_message(line_user_id, text)
+            c.execute("""
+                UPDATE queue_line_bindings
+                SET notified_at = ?, notify_status = 'sent'
+                WHERE id = ?
+            """, (now_str(), binding_id))
+            conn.commit()
+            return {"ok": True, "msg": "sent"}
+        except Exception as exc:
+            c.execute("""
+                UPDATE queue_line_bindings
+                SET notified_at = ?, notify_status = ?
+                WHERE id = ?
+            """, (now_str(), f"error:{str(exc)[:120]}", binding_id))
+            conn.commit()
+            return {"ok": False, "msg": str(exc)}
 
 
 def normalize_cart_item(item: dict) -> dict:
@@ -1224,6 +1597,117 @@ def api_call():
 
     set_call_code(code)
     return jsonify({"ok": True})
+
+
+# ================== Queue Ticket API ==================
+@app.route("/api/status", methods=["GET"])
+def api_queue_status():
+    return jsonify({
+        "ok": True,
+        "current_call": get_current_called_ticket(),
+        "waiting_count": get_waiting_count(),
+    })
+
+
+@app.route("/api/tickets", methods=["POST"])
+def api_queue_take_ticket():
+    data = request.get_json(silent=True) or {}
+    surname = str(data.get("surname", "")).strip()
+    party_size = int(data.get("party_size", 0) or 0)
+    phone = str(data.get("phone", "")).strip()
+
+    if not surname:
+        return jsonify({"ok": False, "detail": "surname required"}), 400
+    if party_size <= 0:
+        return jsonify({"ok": False, "detail": "party_size required"}), 400
+    if not phone:
+        return jsonify({"ok": False, "detail": "phone required"}), 400
+
+    ticket = create_queue_ticket(surname, party_size, phone)
+    return jsonify(ticket)
+
+
+@app.route("/api/admin/tickets", methods=["POST"])
+def api_admin_create_ticket():
+    return api_queue_take_ticket()
+
+
+@app.route("/api/admin/queue", methods=["GET"])
+def api_admin_queue():
+    return jsonify(get_waiting_queue())
+
+
+@app.route("/api/admin/next", methods=["POST"])
+def api_admin_next():
+    ticket = call_next_queue_ticket()
+    if not ticket:
+        return jsonify({"ok": False, "detail": "目前沒有等待中的客人"}), 404
+
+    return jsonify({
+        "ok": True,
+        "current_call": ticket,
+        "waiting_count": get_waiting_count(),
+    })
+
+
+@app.route("/api/admin/repeat", methods=["GET", "POST"])
+def api_admin_repeat():
+    ticket = get_current_called_ticket()
+    if not ticket:
+        return jsonify({"ok": True, "current_call": None, "waiting_count": get_waiting_count()})
+
+    notify_called_ticket(ticket, force=True)
+    set_call_code(ticket["no"])
+    return jsonify({
+        "ok": True,
+        "current_call": ticket,
+        "waiting_count": get_waiting_count(),
+    })
+
+
+@app.route("/api/admin/clear", methods=["POST"])
+def api_admin_clear():
+    clear_queue_today()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/line/bind-ticket", methods=["POST"])
+def api_line_bind_ticket():
+    data = request.get_json(silent=True) or {}
+    ticket_no = normalize_ticket_no(data.get("ticket_no", ""))
+    if not ticket_no:
+        return jsonify({"ok": False, "detail": "ticket_no required"}), 400
+
+    ticket = get_queue_ticket_by_no(ticket_no)
+    if not ticket:
+        return jsonify({"ok": False, "detail": "ticket not found"}), 404
+
+    try:
+        user = verify_line_user(
+            line_id_token=str(data.get("line_id_token", "")).strip(),
+            line_access_token=str(data.get("line_access_token", "")).strip(),
+        )
+    except Exception as exc:
+        return jsonify({"ok": False, "detail": f"LINE verify failed: {exc}"}), 400
+
+    if not user.get("user_id"):
+        return jsonify({"ok": False, "detail": "LINE user not found"}), 400
+
+    updated_ticket = bind_line_to_ticket(
+        ticket_no=ticket_no,
+        surname=str(data.get("surname", "")).strip(),
+        party_size=int(data.get("party_size", 0) or 0),
+        phone=str(data.get("phone", "")).strip(),
+        line_user_id=user["user_id"],
+        line_display_name=user.get("display_name", ""),
+        id_token_sub=user.get("sub", ""),
+    )
+
+    return jsonify({
+        "ok": True,
+        "ticket": updated_ticket,
+        "line_display_name": user.get("display_name", ""),
+    })
 
 
 # ================== Inventory ==================
