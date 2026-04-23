@@ -246,14 +246,12 @@ def make_queue_no(n: int) -> str:
 
 
 def get_next_queue_no() -> str:
-    day = today_str()
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("""
             SELECT COALESCE(MAX(CAST(no AS INTEGER)), 0)
             FROM queue_tickets
-            WHERE SUBSTR(created_at, 1, 10) = ?
-        """, (day,))
+        """)
         row = c.fetchone()
     return make_queue_no(int(row[0] or 0) + 1)
 
@@ -384,6 +382,19 @@ def get_queue_binding_by_ticket_no(ticket_no: str):
         "notified_at": row[5] or "",
         "notify_status": row[6] or "",
         "is_bound": bool(row[1]),
+    }
+
+
+def serialize_public_binding(ticket_no: str, binding: dict | None):
+    binding = binding or {}
+    normalized = normalize_ticket_no(ticket_no)
+    return {
+        "ticket_no": normalized or str(binding.get("ticket_no") or ""),
+        "line_display_name": binding.get("line_display_name", "") or "",
+        "bound_at": binding.get("bound_at", "") or "",
+        "notified_at": binding.get("notified_at", "") or "",
+        "notify_status": binding.get("notify_status", "") or "",
+        "is_bound": bool(binding.get("is_bound")),
     }
 
 
@@ -625,14 +636,6 @@ def resolve_line_binding_user(payload: dict):
             line_id_token=line_id_token,
             line_access_token=line_access_token,
         )
-
-    line_user_id = str(payload.get("line_user_id", "")).strip()
-    if line_user_id:
-        return {
-            "user_id": line_user_id,
-            "display_name": str(payload.get("line_display_name", "")).strip(),
-            "sub": str(payload.get("id_token_sub", "")).strip() or line_user_id,
-        }
 
     return None
 
@@ -1837,19 +1840,10 @@ def api_queue_take_ticket():
     if not phone:
         return jsonify({"ok": False, "detail": "phone required"}), 400
 
-    line_user = None
-    try:
-        line_user = resolve_line_binding_user(data)
-    except Exception as exc:
-        return jsonify({"ok": False, "detail": f"LINE verify failed: {exc}"}), 400
-
     ticket = create_queue_ticket(
         surname=surname,
         party_size=party_size,
         phone=phone,
-        line_user_id=(line_user or {}).get("user_id", ""),
-        line_display_name=(line_user or {}).get("display_name", ""),
-        id_token_sub=(line_user or {}).get("sub", ""),
     )
     return jsonify(ticket)
 
@@ -1863,16 +1857,7 @@ def api_queue_ticket_detail(ticket_no):
     return jsonify({
         "ok": True,
         "ticket": ticket,
-        "binding": binding or {
-            "ticket_no": normalize_ticket_no(ticket_no),
-            "line_user_id": "",
-            "line_display_name": "",
-            "id_token_sub": "",
-            "bound_at": "",
-            "notified_at": "",
-            "notify_status": "",
-            "is_bound": False,
-        }
+        "binding": serialize_public_binding(ticket_no, binding),
     })
 
 
@@ -1886,16 +1871,7 @@ def api_queue_ticket_binding(ticket_no):
     return jsonify({
         "ok": True,
         "ticket_no": ticket["no"],
-        "binding": binding or {
-            "ticket_no": ticket["no"],
-            "line_user_id": "",
-            "line_display_name": "",
-            "id_token_sub": "",
-            "bound_at": "",
-            "notified_at": "",
-            "notify_status": "",
-            "is_bound": False,
-        }
+        "binding": serialize_public_binding(ticket["no"], binding),
     })
 
 
