@@ -22,11 +22,23 @@ from flask_socketio import SocketIO, join_room, emit
 # ================== App ==================
 app = Flask(__name__)
 
-ALLOWED_ORIGINS = [
+DEFAULT_ALLOWED_ORIGINS = [
     "https://partnertake.netlify.app",
     "https://partnerburger.netlify.app",
     "https://illustrious-centaur-327b59.netlify.app",
     "https://silly-marzipan-9f27a5.netlify.app",
+    "http://localhost:5500",
+    "http://127.0.0.1:5500",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+    "null",
+]
+ALLOWED_ORIGINS = [
+    x.strip()
+    for x in os.environ.get("CORS_ORIGINS", ",".join(DEFAULT_ALLOWED_ORIGINS)).split(",")
+    if x.strip()
 ]
 
 ADMIN_PIN = os.environ.get("ADMIN_PIN", "2580").strip()
@@ -196,6 +208,11 @@ def now_dt():
 
 def now_str():
     return now_dt().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def normalize_order_table(table: str | None) -> str:
+    value = str(table or "").strip()
+    return value if value else "內用"
 
 
 def expires_str():
@@ -1023,6 +1040,7 @@ def get_daily_order_no(order_id: int, order_time: str) -> int:
 
 def _create_order_header(session_id: str, table: str, status: str = "new") -> int:
     status = normalize_status(status, "new")
+    table = normalize_order_table(table)
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("""
@@ -1034,6 +1052,7 @@ def _create_order_header(session_id: str, table: str, status: str = "new") -> in
 
 
 def _append_items_to_header(order_id: int, table: str, new_items: list, status: str | None = None):
+    table = normalize_order_table(table)
     new_items = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in (new_items or [])]
     if not new_items:
         return
@@ -1098,6 +1117,7 @@ def _get_next_batch_no(order_id: int) -> int:
 
 def _create_ticket(order_id: int, session_id: str, table: str, items: list, batch_no: int, status: str = "new") -> int:
     status = normalize_status(status, "new")
+    table = normalize_order_table(table)
     ticket_time = now_str()
 
     with get_conn() as conn:
@@ -1223,7 +1243,7 @@ def load_order_by_session(session_id):
         "orderId": get_daily_order_no(int(oid), t),
         "dailyNo": None,
         "sessionId": sid,
-        "tableNo": table,
+        "tableNo": normalize_order_table(table),
         "time": t,
         "status": status,
         "items": items,
@@ -1266,7 +1286,7 @@ def load_ticket_by_id(ticket_id: int):
         "dailyNo": int(daily_no or 0),
         "batchNo": int(batch_no or 1),
         "sessionId": sid,
-        "tableNo": table,
+        "tableNo": normalize_order_table(table),
         "time": t,
         "status": status,
         "items": items_list,
@@ -1308,7 +1328,7 @@ def load_all_tickets(limit=200):
             "dailyNo": int(daily_no or 0),
             "batchNo": int(batch_no or 1),
             "sessionId": sid,
-            "tableNo": table,
+            "tableNo": normalize_order_table(table),
             "time": t,
             "status": status,
             "items": items_list,
@@ -1539,7 +1559,7 @@ def on_order_detail(data):
 @socketio.on("submit_cart_as_order")
 def on_submit(data):
     sid = str((data.get("sessionId") or "")).strip()
-    table = str(data.get("table", "") or "")
+    table = normalize_order_table(data.get("table", ""))
     status = normalize_status(data.get("status", "new"), "new")
 
     if not sid:
@@ -1622,7 +1642,7 @@ def _parse_create_order_payload(data: dict):
     if not session_id:
         session_id = create_unique_session_id()
 
-    table = str(data.get("tableNo") or data.get("table") or "").strip()
+    table = normalize_order_table(data.get("tableNo") or data.get("table") or "")
     status = normalize_status(data.get("status", "new"), "new")
 
     raw_items = data.get("items", [])
