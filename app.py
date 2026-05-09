@@ -110,6 +110,12 @@ def init_db():
         )""")
 
         c.execute("""
+        CREATE TABLE IF NOT EXISTS daily_counters (
+            day TEXT PRIMARY KEY,
+            last_no INTEGER NOT NULL DEFAULT 0
+        )""")
+
+        c.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             session_id TEXT PRIMARY KEY,
             cart_json TEXT NOT NULL,
@@ -813,28 +819,43 @@ def dedupe_by_line_id(items: list) -> list:
 
 
 def get_next_print_daily_no(ticket_time: str) -> int:
-    try:
-        day_str = str(ticket_time or "")[:10]
-        if not day_str:
-            return 1
+    day_str = str(ticket_time or "")[:10] or now_str()[:10]
+    with get_conn() as conn:
+        return allocate_print_daily_no(conn, day_str)
 
-        with get_conn() as conn:
-            c = conn.cursor()
-            c.execute("""
-                SELECT COALESCE(MAX(daily_no), 0)
-                FROM order_tickets
-                WHERE substr(time, 1, 10) = ?
-            """, (day_str,))
-            row = c.fetchone()
 
-        return int(row[0] or 0) + 1
-    except Exception:
-        return 1
+def allocate_print_daily_no(conn, day_str: str) -> int:
+    day_str = str(day_str or "")[:10] or now_str()[:10]
+    c = conn.cursor()
+    c.execute("""
+        SELECT COALESCE(MAX(daily_no), 0)
+        FROM order_tickets
+        WHERE substr(time, 1, 10) = ?
+          AND daily_no > 0
+    """, (day_str,))
+    existing_max = int((c.fetchone() or [0])[0] or 0)
+
+    c.execute("""
+        INSERT OR IGNORE INTO daily_counters (day, last_no)
+        VALUES (?, ?)
+    """, (day_str, existing_max))
+    c.execute("""
+        UPDATE daily_counters
+        SET last_no = CASE
+            WHEN last_no < ? THEN ? + 1
+            ELSE last_no + 1
+        END
+        WHERE day = ?
+    """, (existing_max, existing_max, day_str))
+    c.execute("SELECT last_no FROM daily_counters WHERE day=?", (day_str,))
+    row = c.fetchone()
+    return int(row[0] or 1) if row else 1
 
 
 def assign_daily_no_when_done(ticket_id: int) -> int:
     with get_conn() as conn:
         c = conn.cursor()
+        c.execute("BEGIN IMMEDIATE")
 
         c.execute("""
             SELECT time, daily_no
@@ -845,14 +866,17 @@ def assign_daily_no_when_done(ticket_id: int) -> int:
         row = c.fetchone()
 
         if not row:
+            conn.rollback()
             return 0
 
         ticket_time, current_daily_no = row
 
         if int(current_daily_no or 0) > 0:
+            conn.commit()
             return int(current_daily_no)
 
-        next_no = get_next_print_daily_no(ticket_time)
+        day_str = str(ticket_time or "")[:10] or now_str()[:10]
+        next_no = allocate_print_daily_no(conn, day_str)
 
         c.execute("""
             UPDATE order_tickets
