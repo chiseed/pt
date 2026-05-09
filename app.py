@@ -1364,18 +1364,22 @@ def load_all_tickets(limit=200):
 
 def update_ticket_status(ticket_id: int, status: str) -> bool:
     status = normalize_status(status, "new")
+    status_time = now_str()
 
     with get_conn() as conn:
         c = conn.cursor()
 
-        c.execute("UPDATE order_tickets SET status=? WHERE id=?", (status, int(ticket_id)))
+        if status == "done":
+            c.execute("UPDATE order_tickets SET status=?, time=? WHERE id=?", (status, status_time, int(ticket_id)))
+        else:
+            c.execute("UPDATE order_tickets SET status=? WHERE id=?", (status, int(ticket_id)))
         ok = c.rowcount > 0
 
         if ok:
             c.execute("SELECT order_id FROM order_tickets WHERE id=?", (int(ticket_id),))
             row = c.fetchone()
             if row and row[0]:
-                c.execute("UPDATE orders SET status=?, time=? WHERE id=?", (status, now_str(), int(row[0])))
+                c.execute("UPDATE orders SET status=?, time=? WHERE id=?", (status, status_time, int(row[0])))
 
         conn.commit()
 
