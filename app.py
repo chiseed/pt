@@ -58,7 +58,18 @@ socketio = SocketIO(
     ping_timeout=30
 )
 
-DB_FILE = "orders.db"
+def resolve_db_file() -> str:
+    explicit = os.environ.get("DB_FILE", "").strip()
+    if explicit:
+        return explicit
+    volume_root = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
+    if volume_root:
+        os.makedirs(volume_root, exist_ok=True)
+        return os.path.join(volume_root, "orders.db")
+    return "orders.db"
+
+
+DB_FILE = resolve_db_file()
 SESSION_TTL_SECONDS = 24 * 60 * 60
 ORDER_STATUS_ALLOWED = {"new", "making", "done", "cancelled"}
 LINE_CHANNEL_ID = os.environ.get("LINE_CHANNEL_ID", "").strip()
@@ -116,6 +127,12 @@ def init_db():
         )""")
 
         c.execute("""
+        CREATE TABLE IF NOT EXISTS daily_order_counters (
+            day TEXT PRIMARY KEY,
+            last_no INTEGER NOT NULL DEFAULT 0
+        )""")
+
+        c.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             session_id TEXT PRIMARY KEY,
             cart_json TEXT NOT NULL,
@@ -130,6 +147,47 @@ def init_db():
 
         if not _col_exists(conn, "order_tickets", "daily_no"):
             c.execute("ALTER TABLE order_tickets ADD COLUMN daily_no INTEGER DEFAULT 0")
+            conn.commit()
+
+        if not _col_exists(conn, "orders", "daily_order_no"):
+            c.execute("ALTER TABLE orders ADD COLUMN daily_order_no INTEGER DEFAULT 0")
+            conn.commit()
+
+        c.execute("""
+            SELECT id, substr(time, 1, 10)
+            FROM orders
+            WHERE COALESCE(daily_order_no, 0) = 0
+            ORDER BY time, id
+        """)
+        missing_order_numbers = c.fetchall()
+        for order_id, day_str in missing_order_numbers:
+            day_str = str(day_str or "")[:10] or datetime.datetime.now(TZ).strftime("%Y-%m-%d")
+            c.execute("""
+                SELECT COALESCE(MAX(daily_order_no), 0)
+                FROM orders
+                WHERE substr(time, 1, 10) = ?
+                  AND daily_order_no > 0
+            """, (day_str,))
+            existing_max = int((c.fetchone() or [0])[0] or 0)
+            c.execute("""
+                INSERT OR IGNORE INTO daily_order_counters (day, last_no)
+                VALUES (?, ?)
+            """, (day_str, existing_max))
+            c.execute("""
+                UPDATE daily_order_counters
+                SET last_no = CASE
+                    WHEN last_no < ? THEN ? + 1
+                    ELSE last_no + 1
+                END
+                WHERE day = ?
+            """, (existing_max, existing_max, day_str))
+            c.execute("SELECT last_no FROM daily_order_counters WHERE day=?", (day_str,))
+            next_order_no = int((c.fetchone() or [1])[0] or 1)
+            c.execute(
+                "UPDATE orders SET daily_order_no=? WHERE id=?",
+                (int(next_order_no), int(order_id)),
+            )
+        if missing_order_numbers:
             conn.commit()
 
         c.execute("""
@@ -852,6 +910,34 @@ def allocate_print_daily_no(conn, day_str: str) -> int:
     return int(row[0] or 1) if row else 1
 
 
+def allocate_daily_order_no(conn, day_str: str) -> int:
+    day_str = str(day_str or "")[:10] or now_str()[:10]
+    c = conn.cursor()
+    c.execute("""
+        SELECT COALESCE(MAX(daily_order_no), 0)
+        FROM orders
+        WHERE substr(time, 1, 10) = ?
+          AND daily_order_no > 0
+    """, (day_str,))
+    existing_max = int((c.fetchone() or [0])[0] or 0)
+
+    c.execute("""
+        INSERT OR IGNORE INTO daily_order_counters (day, last_no)
+        VALUES (?, ?)
+    """, (day_str, existing_max))
+    c.execute("""
+        UPDATE daily_order_counters
+        SET last_no = CASE
+            WHEN last_no < ? THEN ? + 1
+            ELSE last_no + 1
+        END
+        WHERE day = ?
+    """, (existing_max, existing_max, day_str))
+    c.execute("SELECT last_no FROM daily_order_counters WHERE day=?", (day_str,))
+    row = c.fetchone()
+    return int(row[0] or 1) if row else 1
+
+
 def assign_daily_no_when_done(ticket_id: int) -> int:
     with get_conn() as conn:
         c = conn.cursor()
@@ -1062,15 +1148,23 @@ def get_daily_order_no(order_id: int, order_time: str) -> int:
         return int(order_id)
 
 
+def get_order_display_no(order_id: int, order_time: str, daily_order_no: int | None = None) -> int:
+    if int(daily_order_no or 0) > 0:
+        return int(daily_order_no)
+    return get_daily_order_no(int(order_id), order_time)
+
+
 def _create_order_header(session_id: str, table: str, status: str = "new") -> int:
     status = normalize_status(status, "new")
     table = normalize_order_table(table)
     with get_conn() as conn:
         c = conn.cursor()
+        created_at = now_str()
+        daily_order_no = allocate_daily_order_no(conn, created_at[:10])
         c.execute("""
-            INSERT INTO orders (session_id, table_num, time, items, status)
-            VALUES (?, ?, ?, ?, ?)
-        """, (session_id, table or "", now_str(), "[]", status))
+            INSERT INTO orders (session_id, table_num, time, items, status, daily_order_no)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (session_id, table or "", created_at, "[]", status, int(daily_order_no)))
         conn.commit()
         return int(c.lastrowid)
 
@@ -1247,7 +1341,7 @@ def load_order_by_session(session_id):
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("""
-            SELECT id, table_num, time, items, status, session_id
+            SELECT id, table_num, time, items, status, session_id, daily_order_no
             FROM orders
             WHERE id=?
             LIMIT 1
@@ -1257,14 +1351,14 @@ def load_order_by_session(session_id):
     if not row:
         return None
 
-    oid, table, t, items, status, sid = row
+    oid, table, t, items, status, sid, daily_order_no = row
     items = json.loads(items) if items else []
     items = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in items]
     items = dedupe_by_line_id(items)
 
     return {
         "id": int(oid),
-        "orderId": get_daily_order_no(int(oid), t),
+        "orderId": get_order_display_no(int(oid), t, daily_order_no),
         "dailyNo": None,
         "sessionId": sid,
         "tableNo": normalize_order_table(table),
@@ -1289,8 +1383,10 @@ def load_ticket_by_id(ticket_id: int):
                 t.items,
                 t.status,
                 t.batch_no,
-                t.daily_no
+                t.daily_no,
+                o.daily_order_no
             FROM order_tickets t
+            JOIN orders o ON o.id = t.order_id
             WHERE t.id = ?
             LIMIT 1
         """, (int(ticket_id),))
@@ -1299,14 +1395,14 @@ def load_ticket_by_id(ticket_id: int):
     if not row:
         return None
 
-    ticket_id, order_id, sid, table, t, items, status, batch_no, daily_no = row
+    ticket_id, order_id, sid, table, t, items, status, batch_no, daily_no, daily_order_no = row
     items_list = json.loads(items) if items else []
     items_list = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in items_list]
     items_list = dedupe_by_line_id(items_list)
 
     return {
         "id": int(ticket_id),
-        "orderId": get_daily_order_no(int(order_id), t),
+        "orderId": get_order_display_no(int(order_id), t, daily_order_no),
         "dailyNo": int(daily_no or 0),
         "batchNo": int(batch_no or 1),
         "sessionId": sid,
@@ -1333,22 +1429,24 @@ def load_all_tickets(limit=200):
                 t.items,
                 t.status,
                 t.batch_no,
-                t.daily_no
+                t.daily_no,
+                o.daily_order_no
             FROM order_tickets t
+            JOIN orders o ON o.id = t.order_id
             ORDER BY t.id DESC
             LIMIT ?
         """, (limit,))
         rows = c.fetchall()
 
     out = []
-    for ticket_id, order_id, sid, table, t, items, status, batch_no, daily_no in rows:
+    for ticket_id, order_id, sid, table, t, items, status, batch_no, daily_no, daily_order_no in rows:
         items_list = json.loads(items) if items else []
         items_list = [normalize_cart_item(x if isinstance(x, dict) else {}) for x in items_list]
         items_list = dedupe_by_line_id(items_list)
 
         out.append({
             "id": int(ticket_id),
-            "orderId": get_daily_order_no(int(order_id), t),
+            "orderId": get_order_display_no(int(order_id), t, daily_order_no),
             "dailyNo": int(daily_no or 0),
             "batchNo": int(batch_no or 1),
             "sessionId": sid,
