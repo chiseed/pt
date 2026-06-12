@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Partner 售完管理</title>
+    <style>
+        :root {
+            --orange: #ff8a00;
+            --orange-700: #ff6a00;
+            --ink: #111827;
+            --muted: #6b7280;
+            --bg: #f6f7fb;
+            --card: #fff;
+            --shadow: 0 12px 30px rgba(0,0,0,.08);
+            --radius: 18px;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans TC", "Helvetica Neue", Arial;
+            background: var(--bg);
+            color: var(--ink);
+        }
+
+        header {
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            background: rgba(255,255,255,.88);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .topbar {
+            max-width: 980px;
+            margin: 0 auto;
+            padding: 14px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .brand {
+            font-weight: 1000;
+            letter-spacing: .02em;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+            .dot.ok {
+                background: #22c55e;
+            }
+
+            .dot.bad {
+                background: #ef4444;
+            }
+
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: .4rem;
+            padding: .35rem .65rem;
+            border-radius: 999px;
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            font-weight: 900;
+            color: #374151;
+        }
+
+        .btn {
+            border: 1px solid #e5e7eb;
+            background: #fff;
+            padding: .65rem .9rem;
+            border-radius: 12px;
+            font-weight: 1000;
+            cursor: pointer;
+            transition: .15s ease;
+        }
+
+            .btn:hover {
+                background: #f9fafb;
+                transform: translateY(-1px);
+            }
+
+        .btn-primary {
+            border: none;
+            background: linear-gradient(160deg, var(--orange), var(--orange-700));
+            color: #fff;
+            box-shadow: 0 14px 24px rgba(255,138,0,.25);
+        }
+
+        .btn-danger {
+            border: 1px solid rgba(239,68,68,.25);
+            background: rgba(239,68,68,.08);
+            color: #b91c1c;
+        }
+
+        .wrap {
+            max-width: 980px;
+            margin: 0 auto;
+            padding: 14px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 320px 1fr;
+            gap: 14px;
+        }
+
+        @media (max-width: 900px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: var(--card);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            border: 1px solid #eef2f7;
+            padding: 18px;
+        }
+
+        .muted {
+            color: var(--muted);
+        }
+
+        .h1 {
+            font-size: 18px;
+            font-weight: 1000;
+            margin: 0 0 10px;
+        }
+
+        .row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .sep {
+            height: 1px;
+            background: #edf1f5;
+            margin: 16px 0;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .tab {
+            padding: .55rem .8rem;
+            border-radius: 999px;
+            border: 1px solid #e5e7eb;
+            background: #fff;
+            font-weight: 1000;
+            cursor: pointer;
+            user-select: none;
+            transition: .15s ease;
+        }
+
+            .tab:hover {
+                background: #f9fafb;
+            }
+
+            .tab.active {
+                background: var(--orange);
+                border-color: transparent;
+                color: #fff;
+                box-shadow: 0 8px 16px rgba(255,138,0,.22);
+            }
+
+        .search {
+            width: 100%;
+            padding: .85rem .95rem;
+            border-radius: 14px;
+            border: 1px solid #e5e7eb;
+            outline: none;
+            font-weight: 900;
+            font-size: 14px;
+            background: #fcfcfd;
+        }
+
+            .search:focus {
+                border-color: rgba(255,138,0,.45);
+                box-shadow: 0 0 0 4px rgba(255,138,0,.08);
+                background: #fff;
+            }
+
+        .list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 12px;
+            border-radius: 16px;
+            border: 1px solid #eef2f7;
+            background: #fff;
+            transition: .15s ease;
+        }
+
+            .item:hover {
+                transform: translateY(-1px);
+                box-shadow: 0 6px 18px rgba(0,0,0,.04);
+            }
+
+            .item.sold {
+                background: #fff7ea;
+                border-color: rgba(255,138,0,.25);
+            }
+
+        .name {
+            font-weight: 1000;
+            line-height: 1.2;
+        }
+
+        .sub {
+            font-size: 13px;
+            color: #6b7280;
+            margin-top: 4px;
+        }
+
+        .right {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .price {
+            font-weight: 1000;
+            color: #374151;
+            min-width: 64px;
+            text-align: right;
+        }
+
+        .switch {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 1000;
+            cursor: pointer;
+            user-select: none;
+            white-space: nowrap;
+        }
+
+            .switch input {
+                transform: scale(1.2);
+                accent-color: var(--orange);
+            }
+
+        .sticky-save {
+            position: sticky;
+            bottom: 12px;
+            z-index: 10;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            padding-top: 14px;
+            margin-top: 8px;
+            background: linear-gradient(to top, rgba(255,255,255,.96), rgba(255,255,255,.78), transparent);
+        }
+
+        .toast {
+            position: fixed;
+            left: 50%;
+            bottom: 24px;
+            transform: translateX(-50%);
+            background: #111827;
+            color: #fff;
+            padding: .6rem .9rem;
+            border-radius: 12px;
+            box-shadow: 0 10px 24px rgba(0,0,0,.25);
+            opacity: 0;
+            transition: opacity .15s, transform .15s;
+            z-index: 999;
+            pointer-events: none;
+            font-weight: 900;
+        }
+
+            .toast.show {
+                opacity: 1;
+                transform: translateX(-50%) translateY(0);
+            }
+
+        .gate {
+            position: fixed;
+            inset: 0;
+            z-index: 2000;
+            background: rgba(0,0,0,.38);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 14px;
+        }
+
+        .gate-card {
+            width: min(92vw, 420px);
+            background: #fff;
+            border-radius: 18px;
+            box-shadow: 0 20px 50px rgba(0,0,0,.25);
+            padding: 18px 18px 16px;
+            border: 1px solid rgba(255,255,255,.6);
+            animation: pop .18s ease-out;
+        }
+
+        @keyframes pop {
+            from {
+                transform: scale(.98);
+                opacity: 0;
+            }
+
+            to {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+
+        .gate-title {
+            font-size: 18px;
+            font-weight: 1000;
+            margin: 2px 0 6px;
+        }
+
+        .gate-desc {
+            color: #6b7280;
+            font-weight: 900;
+            margin: 0 0 12px;
+        }
+
+        .pin-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .pin {
+            flex: 1;
+            padding: .85rem .9rem;
+            border-radius: 14px;
+            border: 1px solid #e5e7eb;
+            font-size: 18px;
+            font-weight: 1000;
+            letter-spacing: .28em;
+            text-align: center;
+            outline: none;
+        }
+
+        .hint {
+            margin-top: 10px;
+            color: #ef4444;
+            font-weight: 1000;
+            display: none;
+        }
+
+        .locked {
+            filter: blur(0px);
+            pointer-events: none;
+            user-select: none;
+            opacity: .55;
+        }
+
+        .locknote {
+            margin-left: auto;
+            display: inline-flex;
+            gap: .4rem;
+            align-items: center;
+            font-weight: 1000;
+            color: #b45309;
+            background: #fff7ea;
+            border: 1px solid rgba(255,138,0,.25);
+            padding: .35rem .6rem;
+            border-radius: 999px;
+        }
+
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="gate" id="pinGate">
+        <div class="gate-card">
+            <div class="gate-title">🔐 管理 PIN</div>
+            <div class="gate-desc">輸入 PIN 才能操作售完清單</div>
+            <div class="pin-row">
+                <input id="pinInput" class="pin" inputmode="numeric" maxlength="8" placeholder="輸入 PIN" />
+                <button class="btn btn-primary" id="pinOkBtn">進入</button>
+            </div>
+            <div class="hint" id="pinHint">PIN 錯誤</div>
+        </div>
+    </div>
+
+    <header>
+        <div class="topbar">
+            <div class="brand">
+                <span>🧾 Partner 售完管理</span>
+                <span class="pill"><span class="dot" id="dot"></span><span id="netText">檢查中</span></span>
+                <span class="pill">售完數：<span id="soldCount">0</span></span>
+                <span class="locknote" id="lockNote">🔒 未驗證</span>
+            </div>
+            <div style="margin-left:auto" class="row">
+                <button class="btn" id="reloadBtn">重新讀取</button>
+                <button class="btn btn-danger" id="clearAllBtn">全部全清（全部可售）</button>
+                <button class="btn btn-danger" id="soldAllBtn">全部售完</button>
+            </div>
+        </div>
+    </header>
+
+    <div class="wrap" id="appRoot">
+        <div class="grid">
+            <div class="card">
+                <p class="h1">分類</p>
+                <div class="tabs" id="tabs"></div>
+
+                <div class="sep"></div>
+
+                <p class="h1">搜尋品項</p>
+                <input class="search" id="q" placeholder="搜尋品項..." />
+            </div>
+
+            <div class="card">
+                <div class="row" style="justify-content:space-between">
+                    <div>
+                        <p class="h1" id="catTitle">—</p>
+                        <div class="muted" id="catHint" style="margin-top:4px">請先選分類</div>
+                    </div>
+                    <div class="row">
+                        <button class="btn" id="catSoldBtn" disabled>此分類：全售完</button>
+                        <button class="btn" id="catClearBtn" disabled>此分類：全可售</button>
+                    </div>
+                </div>
+
+                <div class="sep"></div>
+
+                <div class="list" id="list"></div>
+
+                <div class="sticky-save">
+                    <button class="btn btn-primary" id="saveBtn">儲存售完狀態到後端</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        const BASE_API = "https://pt-production.up.railway.app";
+        const ADMIN_PIN = "2580";
+
+        const MENU = [
+            {
+                key: 'Combo',
+                title: { zh: '吃堡', en: 'Combo' },
+                items: [
+                    { name: '4oz經典起司牛肉堡', enName: 'Classic Cheeseburger', price: 155, img: 'images/items/no.jpg', desc: '4oz 牛肉排搭配香濃起司、新鮮生菜與經典醬料，口感紮實多汁，百吃不膩。\n⚫ 附脆薯、洋蔥圈。', enDesc: 'Classic cheeseburger.\n⚫ Served with fries and onion rings.' },
+                    { name: '花醬熔岩起司牛肉堡', enName: 'Peanut Butter Cheeseburger', price: 160, img: 'images/items/no.jpg', desc: '濃郁花生醬結合香滑起司與牛肉排。\n⚫ 附脆薯、洋蔥圈。', enDesc: 'Peanut butter cheeseburger.\n⚫ Served with fries and onion rings.' },
+                    { name: '焦糖洋蔥起司牛肉堡', enName: 'Caramelized Onion Cheeseburger', price: 170, img: 'images/items/no.jpg', desc: '焦糖洋蔥搭配牛肉排與起司。\n⚫ 附脆薯、洋蔥圈。', enDesc: 'Caramelized onion cheeseburger.\n⚫ Served with fries and onion rings.' },
+                    { name: '辣肉醬起司牛肉堡', enName: 'Spicy Meat Sauce Cheeseburger', price: 180, img: 'images/items/no.jpg', desc: '香濃辣肉醬帶勁夠味。\n⚫ 附脆薯、洋蔥圈。', enDesc: 'Spicy meat sauce cheeseburger.\n⚫ Served with fries and onion rings.' },
+                    { name: 'BBQ培根起司牛肉堡', enName: 'BBQ Bacon Cheeseburger', price: 200, img: 'images/items/no.jpg', desc: 'BBQ 醬、培根與起司的經典組合。\n⚫ 附脆薯、洋蔥圈。', enDesc: 'BBQ bacon cheeseburger.\n⚫ Served with fries and onion rings.' },
+                    { name: '經典雙層起司牛肉堡', enName: 'Classic Double Cheeseburger', price: 210, img: 'images/items/no.jpg', desc: '雙層牛肉排與雙倍起司。\n⚫ 附脆薯、洋蔥圈。', enDesc: 'Classic double cheeseburger.' },
+                    { name: '經典塔塔雞腿堡', enName: 'Classic Chicken Burger', price: 150, img: 'images/items/no.jpg', desc: '酥脆雞腿排搭配經典醬料。\n⚫ 附脆薯、洋蔥圈。', enDesc: 'Classic chicken burger.\n⚫ Served with fries and onion rings.' },
+                    { name: '焦糖洋蔥雞腿堡', enName: 'Caramelized Onion Chicken Burger', price: 160, img: 'images/items/no.jpg', desc: '焦糖洋蔥搭配酥脆雞腿排。\n⚫ 附脆薯、洋蔥圈。', enDesc: 'Caramelized onion chicken burger.\n⚫ Served with fries and onion rings.' },
+                    { name: '辣肉醬雞腿堡', enName: 'Spicy Meat Sauce Chicken Burger', price: 170, img: 'images/items/no.jpg', desc: '辣肉醬與雞腿排的重口味組合。\n⚫ 附脆薯、洋蔥圈。', enDesc: 'Spicy meat sauce chicken burger.\n⚫ Served with fries and onion rings.' },
+                    { name: 'BBQ培根雞腿堡', enName: 'BBQ Bacon Chicken Burger', price: 190, img: 'images/items/no.jpg', desc: 'BBQ 醬與培根提升雞腿堡層次。\n⚫ 附脆薯、洋蔥圈。', enDesc: 'BBQ bacon chicken burger.\n⚫ Served with fries and onion rings.' }
+                ]
+            },
+            {
+                key: 'single',
+                title: { zh: '單點', en: 'A La carte' },
+                items: [
+                    { name: '脆薯', enName: 'Fries', price: 60, img: 'images/items/no.jpg', desc: '現炸薯條外酥內綿。', enDesc: 'Golden crispy fries.' },
+                    { name: '雞塊', enName: 'Chicken nuggets', price: 70, img: 'images/items/no.jpg', desc: '外皮酥香、內裡多汁。', enDesc: 'Crispy chicken nuggets.' },
+                    { name: '美式炸雞(兩塊)', enName: 'Crispy fried chicken', price: 110, img: 'images/items/no.jpg', desc: '經典美式炸雞風味。', enDesc: 'Classic fried chicken.' },
+                    { name: '洋蔥圈', enName: 'Onion rings', price: 60, img: 'images/items/no.jpg', desc: '金黃酥脆、洋蔥香甜。', enDesc: 'Crispy onion rings.' },
+                    { name: '辣肉醬脆薯', enName: 'Fries with spicy meat sauce', price: 75, img: 'images/items/no.jpg', desc: '薯條搭配香濃辣肉醬。', enDesc: 'Fries with spicy meat sauce.' },
+                    { name: '溫雞肉沙拉/巴薩米克醋', enName: 'Warm chicken salad with balsamic vinegar', price: 100, img: 'images/items/no.jpg', desc: '雞肉、生菜與巴薩米克醋。', enDesc: 'Warm chicken salad with balsamic.' }
+                ]
+            },
+            {
+                key: 'coffee',
+                title: { zh: '咖啡', en: 'Coffee' },
+                items: [
+                    { name: '美式咖啡', enName: 'Americano', price: 55, img: 'images/items/no.jpg', desc: '純粹黑咖啡香氣。', enDesc: 'Smooth black coffee.' },
+                    { name: '拿鐵咖啡', enName: 'Coffee Latte', price: 70, img: 'images/items/no.jpg', desc: '濃縮咖啡融合滑順奶香。', enDesc: 'Creamy coffee latte.' },
+                    { name: '海鹽焦糖拿鐵', enName: 'Salted Caramel Latte', price: 90, img: 'images/items/no.jpg', desc: '焦糖香與海鹽層次。', enDesc: 'Salted caramel latte.' },
+                    { name: '巧克力摩卡拿鐵', enName: 'Mocha Latte', price: 100, img: 'images/items/no.jpg', desc: '咖啡與巧克力的濃郁結合。', enDesc: 'Rich mocha latte.' }
+                ]
+            },
+            {
+                key: 'desserts',
+                title: { zh: '甜點', en: 'Desserts' },
+                items: [
+                    { name: 'OREO巧克力奶油鬆餅', enName: 'OREO Pancake', price: 130, img: 'images/items/no.jpg', desc: '巧克力、鮮奶油與 OREO 碎片。', enDesc: 'Pancake with chocolate, whipped cream and OREO.' },
+                    { name: '冰淇淋奶油巧克力鬆餅', enName: 'Ice Cream Pancake', price: 150, img: 'images/items/no.jpg', desc: '熱鬆餅搭配冰淇淋與鮮奶油。', enDesc: 'Warm pancake with ice cream and whipped cream.' }
+                ]
+            },
+            {
+                key: 'drinks',
+                title: { zh: '飲品', en: 'Drinks' },
+                items: [
+                    { name: '紅茶', enName: 'Black Tea', price: 40, img: 'images/items/no.png', desc: '⚫ 飲品甜度固定。\n⚫ 冰塊皆微冰，需去冰請先告知。', enDesc: 'Black tea.\n• Fixed sweetness.\n• Light ice by default.' },
+                    { name: '鮮奶紅茶', enName: 'Black Tea Latte', price: 50, img: 'images/items/no.jpg', desc: '⚫ 飲品甜度固定。\n⚫ 冰塊皆微冰。', enDesc: 'Black tea latte.\n• Fixed sweetness.\n• Light ice by default.' },
+                    { name: '焦糖鮮奶茶', enName: 'Caramel Black Tea Latte', price: 60, img: 'images/items/no.png', desc: '⚫ 飲品甜度固定。\n⚫ 冰塊皆微冰。', enDesc: 'Caramel black tea latte.\n• Fixed sweetness.\n• Light ice by default.' },
+                    { name: '巧克力可可牛奶', enName: 'Chocolate Milk', price: 70, img: 'images/items/no.png', desc: '⚫ 飲品甜度固定。\n⚫ 冰塊皆微冰。', enDesc: 'Chocolate milk.\n• Fixed sweetness.\n• Light ice by default.' },
+                    { name: '可口可樂', enName: 'Coca-Cola', price: 50, img: 'images/items/no.jpg', desc: '⚫ 飲品甜度固定。\n⚫ 冰塊皆微冰。', enDesc: 'Coca-Cola.\n• Fixed sweetness.\n• Light ice by default.', addOns: [{ key: 'plum', name: '加鹹梅 +$5', enName: 'Add Plum +$5', price: 5 }] },
+                    { name: '雪碧', enName: 'Sprite', price: 50, img: 'images/items/no.jpg', desc: '⚫ 飲品甜度固定。\n⚫ 冰塊皆微冰。', enDesc: 'Sprite.\n• Fixed sweetness.\n• Light ice by default.', addOns: [{ key: 'plum', name: '加鹹梅 +$5', enName: 'Add Plum +$5', price: 5 }] }
+                ]
+            }
+        ];
+
+        let currentCi = null;
+        let soldSet = new Set();
+        let currentPin = "";
+
+        const $ = s => document.querySelector(s);
+        const $$ = s => document.querySelectorAll(s);
+
+        function toast(msg) {
+            const el = $('#toast');
+            el.textContent = msg;
+            el.classList.add('show');
+            clearTimeout(window.__t);
+            window.__t = setTimeout(() => el.classList.remove('show'), 1200);
+        }
+
+        function keyOf(ci, ii) {
+            return `${ci}-${ii}`;
+        }
+
+        function setNet(ok) {
+            const dot = $('#dot');
+            const txt = $('#netText');
+            dot.className = 'dot ' + (ok ? 'ok' : 'bad');
+            txt.textContent = ok ? '後端連線正常' : '後端連線失敗';
+        }
+
+        function escapeHtml(s) {
+            return String(s || '').replace(/[&<>"']/g, m => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;'
+            }[m]));
+        }
+
+        function lockUI(locked) {
+            const root = $('#appRoot');
+            const note = $('#lockNote');
+            if (locked) {
+                root.classList.add('locked');
+                note.textContent = '🔒 未驗證';
+            } else {
+                root.classList.remove('locked');
+                note.textContent = '✅ 已驗證';
+            }
+        }
+
+        function openGate() {
+            $('#pinGate').style.display = 'flex';
+            $('#pinHint').style.display = 'none';
+            $('#pinInput').value = '';
+            lockUI(true);
+            setTimeout(() => $('#pinInput')?.focus(), 50);
+        }
+
+        function closeGate() {
+            $('#pinGate').style.display = 'none';
+            lockUI(false);
+        }
+
+        function verifyPin() {
+            const v = String($('#pinInput').value || '').trim();
+            if (!v) {
+                $('#pinHint').textContent = '請輸入 PIN';
+                $('#pinHint').style.display = '';
+                return false;
+            }
+            if (v !== ADMIN_PIN) {
+                $('#pinHint').textContent = 'PIN 錯誤';
+                $('#pinHint').style.display = '';
+                return false;
+            }
+            currentPin = v;
+            closeGate();
+            toast('PIN 驗證成功');
+            return true;
+        }
+
+        async function fetchSold() {
+            try {
+                const r = await fetch(`${BASE_API}/soldout`, { cache: 'no-store' });
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                const j = await r.json();
+                const items = Array.isArray(j.items) ? j.items : [];
+                soldSet = new Set(items.map(([ci, ii]) => keyOf(Number(ci), Number(ii))));
+                $('#soldCount').textContent = String(soldSet.size);
+                setNet(true);
+                renderList();
+                toast('已讀取售完狀態');
+            } catch (e) {
+                setNet(false);
+                toast('讀取售完失敗');
+                console.error(e);
+            }
+        }
+
+        async function saveSold() {
+            const items = [...soldSet].map(k => k.split('-').map(Number));
+            const payload = { items };
+
+            const trySend = async (method) => {
+                const r = await fetch(`${BASE_API}/soldout`, {
+                    method,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Admin-Pin': currentPin || ''
+                    },
+                    body: JSON.stringify(payload)
+                });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return r.json().catch(() => ({}));
+            };
+
+            try {
+                await trySend('POST');
+                toast('已儲存（POST）');
+                await fetchSold();
+                return;
+            } catch (e1) {
+                try {
+                    await trySend('PUT');
+                    toast('已儲存（PUT）');
+                    await fetchSold();
+                    return;
+                } catch (e2) {
+                    console.error(e1, e2);
+                    toast('儲存失敗（後端未支援寫入？）');
+                }
+            }
+        }
+
+        function renderTabs() {
+            const el = $('#tabs');
+            el.innerHTML = MENU.map((c, ci) => {
+                return `<div class="tab" data-ci="${ci}">${c.title?.zh || c.key}</div>`;
+            }).join('');
+
+            $$('#tabs .tab').forEach(t => {
+                t.onclick = () => {
+                    currentCi = Number(t.getAttribute('data-ci'));
+                    $$('#tabs .tab').forEach(x => x.classList.toggle('active', x === t));
+                    $('#catTitle').textContent = `分類：${MENU[currentCi].title?.zh || MENU[currentCi].key}`;
+                    $('#catHint').textContent = `共 ${MENU[currentCi].items.length} 項，勾選「售完」後記得按儲存`;
+                    $('#catSoldBtn').disabled = false;
+                    $('#catClearBtn').disabled = false;
+                    renderList();
+                };
+            });
+        }
+
+        function matchQuery(it, q) {
+            if (!q) return true;
+            const s = (it.name + ' ' + (it.enName || '')).toLowerCase();
+            return s.includes(q.toLowerCase());
+        }
+
+        function renderList() {
+            const list = $('#list');
+            const q = ($('#q').value || '').trim();
+
+            if (currentCi === null) {
+                list.innerHTML = `<div class="muted">請先選分類</div>`;
+                return;
+            }
+
+            const cat = MENU[currentCi];
+            const rows = cat.items
+                .map((it, ii) => ({ it, ii }))
+                .filter(x => matchQuery(x.it, q))
+                .map(({ it, ii }) => {
+                    const k = keyOf(currentCi, ii);
+                    const sold = soldSet.has(k);
+                    return `
+                            <div class="item ${sold ? 'sold' : ''}">
+                                <div>
+                                    <div class="name">${escapeHtml(it.name)}</div>
+                                    <div class="sub">${escapeHtml(it.enName || '')}</div>
+                                </div>
+                                <div class="right">
+                                    <div class="price">＄${Number(it.price || 0)}</div>
+                                    <label class="switch">
+                                        <input type="checkbox" data-k="${k}" ${sold ? 'checked' : ''}/>
+                                        售完
+                                    </label>
+                                </div>
+                            </div>
+                        `;
+                }).join('');
+
+            list.innerHTML = rows || `<div class="muted">沒有符合的品項</div>`;
+
+            $$('input[type="checkbox"][data-k]').forEach(ch => {
+                ch.onchange = () => {
+                    const k = ch.getAttribute('data-k');
+                    if (ch.checked) soldSet.add(k);
+                    else soldSet.delete(k);
+
+                    $('#soldCount').textContent = String(soldSet.size);
+                    ch.closest('.item')?.classList.toggle('sold', ch.checked);
+                };
+            });
+        }
+
+        $('#pinOkBtn').onclick = verifyPin;
+
+        $('#pinInput').addEventListener('input', e => {
+            e.target.value = e.target.value.replace(/\D/g, '').slice(0, 8);
+        });
+
+        $('#pinInput').addEventListener('keydown', e => {
+            if (e.key === 'Enter') $('#pinOkBtn').click();
+        });
+
+        $('#reloadBtn').onclick = fetchSold;
+        $('#saveBtn').onclick = saveSold;
+        $('#q').addEventListener('input', renderList);
+
+        $('#clearAllBtn').onclick = () => {
+            if (!confirm('確定要「全部全清」？（全部變可售）')) return;
+            soldSet.clear();
+            $('#soldCount').textContent = '0';
+            renderList();
+            toast('已全部清空（尚未儲存）');
+        };
+
+        $('#soldAllBtn').onclick = () => {
+            if (!confirm('確定要「全部售完」？')) return;
+            const next = new Set();
+            MENU.forEach((cat, ci) => {
+                cat.items.forEach((_, ii) => next.add(keyOf(ci, ii)));
+            });
+            soldSet = next;
+            $('#soldCount').textContent = String(soldSet.size);
+            renderList();
+            toast('已全部售完（尚未儲存）');
+        };
+
+        $('#catSoldBtn').onclick = () => {
+            if (currentCi === null) return;
+            if (!confirm('確定此分類全部售完？')) return;
+            MENU[currentCi].items.forEach((_, ii) => soldSet.add(keyOf(currentCi, ii)));
+            $('#soldCount').textContent = String(soldSet.size);
+            renderList();
+        };
+
+        $('#catClearBtn').onclick = () => {
+            if (currentCi === null) return;
+            if (!confirm('確定此分類全部可售？')) return;
+            MENU[currentCi].items.forEach((_, ii) => soldSet.delete(keyOf(currentCi, ii)));
+            $('#soldCount').textContent = String(soldSet.size);
+            renderList();
+        };
+
+        renderTabs();
+        fetchSold();
+        openGate();
+    </script>
+</body>
+</html>

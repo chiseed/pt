@@ -1,0 +1,890 @@
+﻿{
+    "categories":  [
+                       {
+                           "id":  5,
+                           "name":  "吃堡"
+                       },
+                       {
+                           "id":  1,
+                           "name":  "飲品"
+                       },
+                       {
+                           "id":  2,
+                           "name":  "甜點",
+                           "hidden":  true
+                       },
+                       {
+                           "id":  3,
+                           "name":  "單點"
+                       },
+                       {
+                           "id":  4,
+                           "name":  "啤酒"
+                       }
+                   ],
+    "products":  [
+                     {
+                         "id":  33,
+                         "name":  "綠茶",
+                         "price":  40,
+                         "categoryId":  1,
+                         "options":  [
+                                         {
+                                             "id":  1,
+                                             "name":  "冰",
+                                             "price":  0
+                                         },
+                                         {
+                                             "id":  2,
+                                             "name":  "熱",
+                                             "price":  0
+                                         }
+                                     ],
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "去冰"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  1,
+                         "name":  "紅茶",
+                         "price":  40,
+                         "categoryId":  1,
+                         "options":  [
+                                         {
+                                             "id":  1,
+                                             "name":  "冰",
+                                             "price":  0
+                                         },
+                                         {
+                                             "id":  2,
+                                             "name":  "熱",
+                                             "price":  0
+                                         }
+                                     ],
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "去冰"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  2,
+                         "name":  "鮮奶紅茶",
+                         "price":  50,
+                         "categoryId":  1,
+                         "options":  [
+                                         {
+                                             "id":  1,
+                                             "name":  "冰",
+                                             "price":  0
+                                         },
+                                         {
+                                             "id":  2,
+                                             "name":  "熱",
+                                             "price":  0
+                                         }
+                                     ],
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "去冰"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  3,
+                         "name":  "焦糖鮮奶茶",
+                         "price":  60,
+                         "categoryId":  1,
+                         "options":  [
+                                         {
+                                             "id":  1,
+                                             "name":  "冰",
+                                             "price":  0
+                                         },
+                                         {
+                                             "id":  2,
+                                             "name":  "熱",
+                                             "price":  0
+                                         }
+                                     ],
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "去冰"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  4,
+                         "name":  "巧克力可可牛奶",
+                         "price":  70,
+                         "categoryId":  1,
+                         "options":  [
+                                         {
+                                             "id":  1,
+                                             "name":  "冰",
+                                             "price":  0
+                                         },
+                                         {
+                                             "id":  2,
+                                             "name":  "熱",
+                                             "price":  0
+                                         }
+                                     ],
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "去冰"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  5,
+                         "name":  "可口可樂",
+                         "price":  40,
+                         "categoryId":  1,
+                         "options":  [
+                                         {
+                                             "id":  1,
+                                             "name":  "冰",
+                                             "price":  0
+                                         }
+                                     ],
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "去冰"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  6,
+                         "name":  "雪碧",
+                         "price":  40,
+                         "categoryId":  1,
+                         "options":  [
+                                         {
+                                             "id":  1,
+                                             "name":  "冰",
+                                             "price":  0
+                                         }
+                                     ],
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "去冰"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  7,
+                         "name":  "美式咖啡",
+                         "price":  55,
+                         "categoryId":  1,
+                         "options":  [
+                                         {
+                                             "id":  1,
+                                             "name":  "冰",
+                                             "price":  0
+                                         },
+                                         {
+                                             "id":  2,
+                                             "name":  "熱",
+                                             "price":  0
+                                         }
+                                     ],
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "去冰"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  8,
+                         "name":  "拿鐵咖啡",
+                         "price":  70,
+                         "categoryId":  1,
+                         "options":  [
+                                         {
+                                             "id":  1,
+                                             "name":  "冰",
+                                             "price":  0
+                                         },
+                                         {
+                                             "id":  2,
+                                             "name":  "熱",
+                                             "price":  0
+                                         }
+                                     ],
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "去冰"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  9,
+                         "name":  "海鹽焦糖拿鐵",
+                         "price":  90,
+                         "categoryId":  1,
+                         "options":  [
+                                         {
+                                             "id":  1,
+                                             "name":  "冰",
+                                             "price":  0
+                                         },
+                                         {
+                                             "id":  2,
+                                             "name":  "熱",
+                                             "price":  0
+                                         }
+                                     ],
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "去冰"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  10,
+                         "name":  "巧克力摩卡拿鐵",
+                         "price":  100,
+                         "categoryId":  1,
+                         "options":  [
+                                         {
+                                             "id":  1,
+                                             "name":  "冰",
+                                             "price":  0
+                                         },
+                                         {
+                                             "id":  2,
+                                             "name":  "熱",
+                                             "price":  0
+                                         }
+                                     ],
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "去冰"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  11,
+                         "name":  "可樂娜",
+                         "price":  100,
+                         "categoryId":  1,
+                         "options":  [
+                                         {
+                                             "id":  1,
+                                             "name":  "冰",
+                                             "price":  0
+                                         }
+                                     ],
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "去冰"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  12,
+                         "name":  "百威",
+                         "price":  75,
+                         "categoryId":  1,
+                         "options":  [
+                                         {
+                                             "id":  1,
+                                             "name":  "冰",
+                                             "price":  0
+                                         }
+                                     ],
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "去冰"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  13,
+                         "name":  "4oz經典起司牛肉堡",
+                         "price":  155,
+                         "categoryId":  5,
+                         "options":  [
+                                         {
+                                             "id":  1,
+                                             "name":  "漢堡",
+                                             "price":  0
+                                         }
+                                     ],
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "不菜"
+                                        },
+                                        {
+                                            "id":  2,
+                                            "name":  "不醬"
+                                        },
+                                        {
+                                            "id":  3,
+                                            "name":  "不洋蔥圈-\u003e薯條"
+                                        },
+                                        {
+                                            "id":  4,
+                                            "name":  "不薯條-\u003e洋蔥圈"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  32,
+                         "name":  "花醬熔岩起司牛肉堡",
+                         "price":  160,
+                         "categoryId":  5,
+                         "options":  [
+                                         {
+                                             "id":  1,
+                                             "name":  "漢堡",
+                                             "price":  0
+                                         }
+                                     ],
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "不菜"
+                                        },
+                                        {
+                                            "id":  2,
+                                            "name":  "不醬"
+                                        },
+                                        {
+                                            "id":  3,
+                                            "name":  "不洋蔥圈-\u003e薯條"
+                                        },
+                                        {
+                                            "id":  4,
+                                            "name":  "不薯條-\u003e洋蔥圈"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  14,
+                         "name":  "焦糖洋蔥起司牛肉堡",
+                         "price":  170,
+                         "categoryId":  5,
+                         "options":  [
+                                         {
+                                             "id":  1,
+                                             "name":  "漢堡",
+                                             "price":  0
+                                         }
+                                     ],
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "不菜"
+                                        },
+                                        {
+                                            "id":  2,
+                                            "name":  "不醬"
+                                        },
+                                        {
+                                            "id":  3,
+                                            "name":  "不洋蔥圈-\u003e薯條"
+                                        },
+                                        {
+                                            "id":  4,
+                                            "name":  "不薯條-\u003e洋蔥圈"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  15,
+                         "name":  "辣肉醬起司牛肉堡",
+                         "price":  180,
+                         "categoryId":  5,
+                         "options":  [
+                                         {
+                                             "id":  1,
+                                             "name":  "漢堡",
+                                             "price":  0
+                                         }
+                                     ],
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "不菜"
+                                        },
+                                        {
+                                            "id":  2,
+                                            "name":  "不醬"
+                                        },
+                                        {
+                                            "id":  3,
+                                            "name":  "不洋蔥圈-\u003e薯條"
+                                        },
+                                        {
+                                            "id":  4,
+                                            "name":  "不薯條-\u003e洋蔥圈"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  16,
+                         "name":  "BBQ培根起司牛肉堡",
+                         "price":  200,
+                         "categoryId":  5,
+                         "options":  [
+                                         {
+                                             "id":  1,
+                                             "name":  "漢堡",
+                                             "price":  0
+                                         }
+                                     ],
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "不菜"
+                                        },
+                                        {
+                                            "id":  2,
+                                            "name":  "不醬"
+                                        },
+                                        {
+                                            "id":  3,
+                                            "name":  "不洋蔥圈-\u003e薯條"
+                                        },
+                                        {
+                                            "id":  4,
+                                            "name":  "不薯條-\u003e洋蔥圈"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  16,
+                         "name":  "經典雙層起司牛肉堡",
+                         "price":  210,
+                         "categoryId":  5,
+                         "options":  [
+                                         {
+                                             "id":  1,
+                                             "name":  "漢堡",
+                                             "price":  0
+                                         }
+                                     ],
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "不菜"
+                                        },
+                                        {
+                                            "id":  2,
+                                            "name":  "不醬"
+                                        },
+                                        {
+                                            "id":  3,
+                                            "name":  "不洋蔥圈-\u003e薯條"
+                                        },
+                                        {
+                                            "id":  4,
+                                            "name":  "不薯條-\u003e洋蔥圈"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  17,
+                         "name":  "經典塔塔雞腿堡",
+                         "price":  150,
+                         "categoryId":  5,
+                         "options":  [
+                                         {
+                                             "id":  1,
+                                             "name":  "漢堡",
+                                             "price":  0
+                                         }
+                                     ],
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "不菜"
+                                        },
+                                        {
+                                            "id":  2,
+                                            "name":  "不醬"
+                                        },
+                                        {
+                                            "id":  3,
+                                            "name":  "不洋蔥圈-\u003e薯條"
+                                        },
+                                        {
+                                            "id":  4,
+                                            "name":  "不薯條-\u003e洋蔥圈"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  18,
+                         "name":  "焦糖洋蔥雞腿堡",
+                         "price":  160,
+                         "categoryId":  5,
+                         "options":  [
+                                         {
+                                             "id":  1,
+                                             "name":  "漢堡",
+                                             "price":  0
+                                         }
+                                     ],
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "不菜"
+                                        },
+                                        {
+                                            "id":  2,
+                                            "name":  "不醬"
+                                        },
+                                        {
+                                            "id":  3,
+                                            "name":  "不洋蔥圈-\u003e薯條"
+                                        },
+                                        {
+                                            "id":  4,
+                                            "name":  "不薯條-\u003e洋蔥圈"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  19,
+                         "name":  "辣肉醬雞腿堡",
+                         "price":  170,
+                         "categoryId":  5,
+                         "options":  [
+                                         {
+                                             "id":  1,
+                                             "name":  "漢堡",
+                                             "price":  0
+                                         }
+                                     ],
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "不菜"
+                                        },
+                                        {
+                                            "id":  2,
+                                            "name":  "不醬"
+                                        },
+                                        {
+                                            "id":  3,
+                                            "name":  "不洋蔥圈-\u003e薯條"
+                                        },
+                                        {
+                                            "id":  4,
+                                            "name":  "不薯條-\u003e洋蔥圈"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  20,
+                         "name":  "BBQ培根雞腿堡",
+                         "price":  190,
+                         "categoryId":  5,
+                         "options":  [
+                                         {
+                                             "id":  1,
+                                             "name":  "漢堡",
+                                             "price":  0
+                                         }
+                                     ],
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "不菜"
+                                        },
+                                        {
+                                            "id":  2,
+                                            "name":  "不醬"
+                                        },
+                                        {
+                                            "id":  3,
+                                            "name":  "不洋蔥圈-\u003e薯條"
+                                        },
+                                        {
+                                            "id":  4,
+                                            "name":  "不薯條-\u003e洋蔥圈"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  21,
+                         "name":  "脆薯",
+                         "price":  60,
+                         "categoryId":  3,
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "不菜"
+                                        },
+                                        {
+                                            "id":  2,
+                                            "name":  "不醬"
+                                        },
+                                        {
+                                            "id":  3,
+                                            "name":  "不洋蔥圈-\u003e薯條"
+                                        },
+                                        {
+                                            "id":  4,
+                                            "name":  "不薯條-\u003e洋蔥圈"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  22,
+                         "name":  "雞塊",
+                         "price":  70,
+                         "categoryId":  3,
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "不菜"
+                                        },
+                                        {
+                                            "id":  2,
+                                            "name":  "不醬"
+                                        },
+                                        {
+                                            "id":  3,
+                                            "name":  "不洋蔥圈-\u003e薯條"
+                                        },
+                                        {
+                                            "id":  4,
+                                            "name":  "不薯條-\u003e洋蔥圈"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  23,
+                         "name":  "美式炸雞(兩塊)",
+                         "price":  110,
+                         "categoryId":  3,
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "不菜"
+                                        },
+                                        {
+                                            "id":  2,
+                                            "name":  "不醬"
+                                        },
+                                        {
+                                            "id":  3,
+                                            "name":  "不洋蔥圈-\u003e薯條"
+                                        },
+                                        {
+                                            "id":  4,
+                                            "name":  "不薯條-\u003e洋蔥圈"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  24,
+                         "name":  "洋蔥圈",
+                         "price":  60,
+                         "categoryId":  3,
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "不菜"
+                                        },
+                                        {
+                                            "id":  2,
+                                            "name":  "不醬"
+                                        },
+                                        {
+                                            "id":  3,
+                                            "name":  "不洋蔥圈-\u003e薯條"
+                                        },
+                                        {
+                                            "id":  4,
+                                            "name":  "不薯條-\u003e洋蔥圈"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  25,
+                         "name":  "辣肉醬脆薯",
+                         "price":  75,
+                         "categoryId":  3,
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "不菜"
+                                        },
+                                        {
+                                            "id":  2,
+                                            "name":  "不醬"
+                                        },
+                                        {
+                                            "id":  3,
+                                            "name":  "不洋蔥圈-\u003e薯條"
+                                        },
+                                        {
+                                            "id":  4,
+                                            "name":  "不薯條-\u003e洋蔥圈"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  26,
+                         "name":  "溫雞肉沙拉/巴薩米克醋",
+                         "price":  100,
+                         "categoryId":  3,
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "不菜"
+                                        },
+                                        {
+                                            "id":  2,
+                                            "name":  "不醬"
+                                        },
+                                        {
+                                            "id":  3,
+                                            "name":  "不洋蔥圈-\u003e薯條"
+                                        },
+                                        {
+                                            "id":  4,
+                                            "name":  "不薯條-\u003e洋蔥圈"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  31,
+                         "name":  "百威(續瓶)",
+                         "price":  60,
+                         "categoryId":  4,
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "暫時不知"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     },
+                     {
+                         "id":  30,
+                         "name":  "可樂娜(續瓶)",
+                         "price":  70,
+                         "categoryId":  4,
+                         "tastes":  [
+                                        {
+                                            "id":  1,
+                                            "name":  "暫時不知"
+                                        }
+                                    ],
+                         "remarks":  [
+                                         "外帶"
+                                     ]
+                     }
+                 ]
+}

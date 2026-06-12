@@ -1,0 +1,3177 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Partner點餐網頁</title>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <style>
+        :root {
+            --orange: #ff8a00;
+            --orange-700: #ff6a00;
+            --ink: #222;
+            --muted: #6b7280;
+            --bg: #f7f7f7;
+            --card: #fff;
+            --shadow: 0 8px 24px rgba(0,0,0,.08);
+            --radius: 16px;
+            --fab-right-gap: 24px;
+            --left-pad: 0px;
+            --graffiti-overlap: -90px;
+            --graffiti-lift: 0px;
+            --brand-shift: 0px;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html, body {
+            overflow-x: hidden;
+        }
+
+        body {
+            margin: 0;
+            font-family: ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans TC","Helvetica Neue",Arial;
+            color: var(--ink);
+            background: var(--bg);
+        }
+
+        .muted {
+            color: var(--muted);
+        }
+
+        .preline {
+            white-space: pre-line;
+        }
+
+        .topbar {
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            backdrop-filter: saturate(180%) blur(10px);
+            background: rgba(255,255,255,.85);
+            border-bottom: 1px solid #eee;
+        }
+
+        .topbar-inner {
+            max-width: 520px;
+            margin: 0 auto;
+            padding: 0 1rem;
+            padding-left: calc(env(safe-area-inset-left,0px) + 1rem + var(--left-pad));
+            padding-right: calc(env(safe-area-inset-right,0px) + 1rem);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            flex-wrap: nowrap;
+            overflow: visible;
+            min-width: 0;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            white-space: nowrap;
+            line-height: 0;
+            transform: translateX(var(--brand-shift));
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+        }
+
+            .brand #logo {
+                height: clamp(60px,8vw,72px);
+                width: clamp(60px,8vw,72px);
+                border-radius: 50%;
+                object-fit: cover;
+                border: 2px solid #fff;
+                box-shadow: 0 6px 14px rgba(0,0,0,.10);
+                flex: 0 0 auto;
+            }
+
+            .brand .graffiti {
+                display: block;
+                height: clamp(120px,0vw,180px);
+                width: auto;
+                object-fit: contain;
+                filter: drop-shadow(0 2px 0 rgba(0,0,0,.28));
+                margin-left: var(--graffiti-overlap);
+                transform: translateY(var(--graffiti-lift));
+                max-width: 100%;
+                flex: 1 1 auto;
+            }
+
+        .topbar-actions {
+            display: flex;
+            align-items: center;
+            gap: .45rem;
+            flex: 0 0 auto;
+            margin-left: auto;
+        }
+
+        .btn-ghost {
+            border: 1px solid #e5e7eb;
+            background: #fff;
+            padding: .45rem .75rem;
+            border-radius: 999px;
+            cursor: pointer;
+            font-weight: 800;
+        }
+
+        .btn-cart {
+            white-space: nowrap;
+            border: 2px solid var(--orange);
+            color: var(--orange);
+            background: #fff;
+            padding: .5rem 1rem;
+            border-radius: 999px;
+            font-weight: 900;
+            cursor: pointer;
+            box-shadow: 0 3px 10px rgba(255,138,0,.18);
+        }
+
+            .btn-cart:hover {
+                background: #fff7ea;
+            }
+
+        .badge {
+            background: var(--orange);
+            color: #fff;
+            font-weight: 900;
+            border-radius: 999px;
+            padding: .1rem .55rem;
+            font-size: .95rem;
+            box-shadow: 0 2px 6px rgba(255,138,0,.35);
+        }
+
+        .container {
+            max-width: 520px;
+            margin: 0 auto;
+            padding: 1rem;
+            padding-left: calc(env(safe-area-inset-left,0px) + 1rem + var(--left-pad));
+            padding-right: calc(env(safe-area-inset-right,0px) + 1rem);
+        }
+
+        .card {
+            background: var(--card);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            padding: 1.2rem;
+            border: 1px solid #eef2f7;
+        }
+
+        #page-menu.card {
+            background: #CCCCCC !important;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.35), inset 0 -1px 0 rgba(0,0,0,.06);
+            border: 0 !important;
+        }
+
+        #page-home.card {
+            background: linear-gradient(180deg,#fff,#fff9f1 60%,#fff);
+        }
+
+        .btn-primary {
+            border: none;
+            width: 100%;
+            background: linear-gradient(160deg,var(--orange),var(--orange-700));
+            color: #fff;
+            font-weight: 1000;
+            letter-spacing: .04em;
+            padding: 1.05rem 1rem;
+            border-radius: 16px;
+            cursor: pointer;
+            box-shadow: 0 16px 32px rgba(255,138,0,.25);
+            font-size: 1.1rem;
+        }
+
+        .tabs {
+            display: flex;
+            gap: .5rem;
+            margin-bottom: .6rem;
+            position: sticky;
+            top: 72px;
+            z-index: 60;
+            background: rgba(255,255,255,.96);
+            backdrop-filter: blur(10px);
+            border-radius: 999px;
+            padding: .35rem;
+            border: 1px solid rgba(255,255,255,.55);
+            overflow-x: auto;
+            overflow-y: hidden;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+
+            .tabs::-webkit-scrollbar {
+                display: none;
+            }
+
+        .tab {
+            flex: 1 0 72px;
+            min-width: 72px;
+            text-align: center;
+            padding: .6rem .4rem;
+            border-radius: 999px;
+            cursor: pointer;
+            user-select: none;
+            background: rgba(255,255,255,.85) !important;
+            border: 1px solid rgba(255,255,255,.7) !important;
+            color: #374151;
+            font-weight: 900;
+        }
+
+            .tab.active {
+                background: var(--orange) !important;
+                color: #fff;
+                border-color: transparent !important;
+                box-shadow: 0 8px 18px rgba(255,138,0,.28);
+            }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(2,minmax(0,1fr));
+            gap: .7rem;
+        }
+
+        .card-item {
+            border-radius: 14px;
+            overflow: hidden;
+            cursor: pointer;
+            background: #fff;
+            border: 1px solid rgba(0,0,0,.05) !important;
+            box-shadow: 0 6px 14px rgba(0,0,0,.08), 0 1px 0 rgba(255,255,255,.6) inset;
+        }
+
+        .thumb {
+            width: 100%;
+            aspect-ratio: 1/1;
+            object-fit: cover;
+            display: block;
+            background: #e9e9e9 !important;
+        }
+
+        .thumb-wrap {
+            position: relative;
+        }
+
+        .sold-mask {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0,0,0,.45);
+            color: #fff;
+            font-weight: 1000;
+            letter-spacing: .2em;
+            font-size: 1.1rem;
+        }
+
+        .card-body {
+            padding: .55rem .7rem .7rem;
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: .25rem;
+        }
+
+        .card-title {
+            font-weight: 1000;
+            line-height: 1.2;
+            word-break: break-word;
+        }
+
+        .card-price {
+            color: var(--muted);
+            font-weight: 1000;
+        }
+
+        .section {
+            scroll-margin-top: 120px;
+        }
+
+        .section-header {
+            position: sticky;
+            top: 126px;
+            z-index: 35;
+            background: linear-gradient(160deg, #ff8a00, #ff6a00) !important;
+            backdrop-filter: blur(6px);
+            border-radius: 18px;
+            border: none;
+            box-shadow: 0 6px 14px rgba(255,138,0,.22);
+            margin: 0 0 .8rem;
+            padding: .7rem .8rem .65rem;
+            min-height: 54px;
+            display: flex;
+            align-items: center;
+        }
+
+        .section-title {
+            font-size: 1.35rem;
+            font-weight: 1000;
+            margin: 0;
+            color: #fff;
+            letter-spacing: .04em;
+        }
+
+        #menuLong {
+            padding-bottom: .6rem;
+        }
+
+        .fab {
+            position: fixed;
+            right: 16px;
+            bottom: 20px;
+            z-index: 60;
+            display: flex;
+            align-items: center;
+            gap: .6rem;
+            background: #fff;
+            color: var(--orange);
+            font-weight: 1000;
+            border: 2px solid var(--orange);
+            padding: .6rem 1.1rem;
+            border-radius: 999px;
+            cursor: pointer;
+            box-shadow: var(--shadow);
+        }
+
+        .modal {
+            padding: 0 10px;
+            text-align: initial;
+            position: fixed;
+            inset: 0 !important;
+            display: none;
+            align-items: center !important;
+            justify-content: center !important;
+            z-index: 80;
+            background: rgba(0,0,0,.35);
+        }
+
+            .modal.show {
+                display: flex !important;
+            }
+
+        .dialog {
+            width: min(94vw,420px);
+            max-height: 85vh;
+            overflow-y: auto;
+            margin: 0 auto;
+            background: #fff;
+            border-radius: 18px;
+            box-shadow: var(--shadow);
+            padding: 1.1rem 1.1rem 1.3rem;
+            position: relative;
+        }
+
+            .dialog .x {
+                position: absolute;
+                right: .8rem;
+                top: .6rem;
+                font-size: 1.5rem;
+                color: #cbd5e1;
+                cursor: pointer;
+                user-select: none;
+            }
+
+        .btn-full {
+            width: 100%;
+            padding: .85rem 1rem;
+            border: none;
+            border-radius: 12px;
+            background: var(--orange);
+            color: #fff;
+            font-weight: 1000;
+            cursor: pointer;
+        }
+
+        #addToCart {
+            font-size: 1.25rem;
+            padding: 1rem 1rem;
+        }
+
+        .btn-soft {
+            width: 100%;
+            margin-top: .9rem;
+            border: 1px solid #e5e7eb;
+            background: #fff;
+            border-radius: 14px;
+            padding: .85rem 1rem;
+            font-weight: 1000;
+            cursor: pointer;
+        }
+
+        #orderDetailModal .btn-soft[data-close="orderDetailModal"] {
+            font-size: 1.3rem;
+            padding: 1rem 1rem;
+        }
+
+        #odIdPill {
+            font-size: 1.35rem;
+            padding: .56rem .85rem;
+            font-weight: 1000;
+        }
+
+        #odIdPill .order-no {
+            font-size: 1.85rem;
+            font-weight: 1000;
+            color: var(--orange-700);
+            line-height: 1;
+        }
+
+        #odIdPill .order-code {
+            font-size: 1rem;
+            font-weight: 1000;
+            color: #334155;
+            line-height: 1;
+        }
+
+        .confirm-actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: .7rem;
+            margin-top: 1rem;
+        }
+
+        .confirm-actions .btn-soft,
+        .confirm-actions .btn-full {
+            margin-top: 0;
+        }
+
+        @media (max-width: 460px) {
+            .confirm-actions {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        #page-cart .cart-card {
+            margin: .75rem 0;
+            padding: 1rem 1rem .9rem;
+            border: 1px solid #eef2f7;
+            border-radius: 16px;
+            background: #fff;
+            box-shadow: 0 10px 22px rgba(0,0,0,.06);
+        }
+
+        #page-cart .cart-row {
+            display: grid;
+            grid-template-columns: 1fr auto auto;
+            align-items: center;
+            gap: .6rem;
+        }
+
+        #page-cart .cart-name {
+            font-weight: 1000;
+            line-height: 1.25;
+        }
+
+        #page-cart .qty {
+            width: 76px;
+            height: 38px;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: .35rem .6rem;
+            text-align: center;
+            font-weight: 900;
+            background: #fff;
+        }
+
+        #page-cart .price {
+            font-weight: 1000;
+            min-width: 70px;
+            text-align: right;
+        }
+
+        #page-cart .btn-remove {
+            border: 1px solid #e5e7eb;
+            background: #fff;
+            padding: .45rem .7rem;
+            border-radius: 999px;
+            cursor: pointer;
+            font-weight: 900;
+        }
+
+        #page-cart .opt {
+            margin: .35rem 0 0;
+            color: #6b7280;
+            font-size: .95rem;
+        }
+
+        .welcome-title {
+            font-weight: 1000;
+            margin: .2rem 0 .6rem;
+            font-size: 1.15rem;
+        }
+
+        .welcome-section {
+            padding: .8rem 0;
+            border-top: 1px solid #eef2f7;
+        }
+
+            .welcome-section:first-of-type {
+                border-top: none;
+                padding-top: .2rem;
+            }
+
+        .welcome-sub {
+            color: #475569;
+            font-weight: 1000;
+            margin: .2rem 0 .35rem;
+        }
+
+        .welcome-desc {
+            color: #64748b;
+            font-size: .95rem;
+            margin: 0 0 .65rem;
+        }
+
+        .order-type-grid {
+            display: grid;
+            grid-template-columns: repeat(2,minmax(0,1fr));
+            gap: .6rem;
+            margin: .75rem 0;
+        }
+
+        .order-type-btn {
+            border: 2px solid #e5e7eb;
+            background: #fff;
+            color: #111827;
+            border-radius: 14px;
+            padding: .85rem .7rem;
+            cursor: pointer;
+            font-weight: 1000;
+            min-height: 54px;
+        }
+
+        .order-type-btn.active {
+            border-color: var(--orange);
+            background: #fff7ed;
+            color: var(--orange-700);
+        }
+
+        .order-type-btn:focus-visible {
+            outline: 3px solid rgba(255,138,0,.28);
+            outline-offset: 2px;
+        }
+
+        .btn-orange {
+            width: 100%;
+            border: none;
+            background: linear-gradient(160deg,var(--orange),var(--orange-700));
+            color: #fff;
+            font-weight: 1000;
+            padding: .9rem 1rem;
+            border-radius: 14px;
+            cursor: pointer;
+            box-shadow: 0 14px 26px rgba(255,138,0,.22);
+        }
+
+        .btn-orange:disabled {
+            opacity: .5;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+
+        .join-row {
+            display: flex;
+            gap: .5rem;
+            align-items: center;
+        }
+
+        .join-input {
+            flex: 1;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: .75rem .8rem;
+            font-weight: 1000;
+            letter-spacing: .25em;
+            text-align: center;
+            font-size: 1.05rem;
+            outline: none;
+        }
+
+        .join-btn, .copy-btn {
+            border: 1px solid #e5e7eb;
+            background: #fff;
+            border-radius: 12px;
+            padding: .75rem 1rem;
+            font-weight: 1000;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .code-row {
+            display: flex;
+            gap: .6rem;
+            align-items: center;
+            margin-top: .6rem;
+        }
+
+        .code-box {
+            flex: 1;
+            background: #f8fafc;
+            border: 1px solid #e5e7eb;
+            border-radius: 14px;
+            padding: .8rem .9rem;
+            text-align: center;
+            font-weight: 1000;
+            font-size: 1.4rem;
+            letter-spacing: .22em;
+            color: #0f172a;
+        }
+
+        .menu-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: .6rem;
+            gap: .5rem;
+            flex-wrap: wrap;
+        }
+
+        .menu-head-actions {
+            display: flex;
+            gap: .5rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .presence {
+            width: 100%;
+            display: flex;
+            gap: .45rem;
+            align-items: center;
+            flex-wrap: wrap;
+            padding: .55rem .65rem;
+            border-radius: 14px;
+            background: rgba(255,255,255,.8) !important;
+            border: 1px solid rgba(255,255,255,.7) !important;
+        }
+
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: .35rem;
+            padding: .35rem .6rem;
+            border-radius: 999px;
+            font-weight: 900;
+            color: #334155;
+            background: rgba(255,255,255,.9) !important;
+            border: 1px solid rgba(255,255,255,.75) !important;
+        }
+
+        .upsell-wrap {
+            margin-top: .85rem;
+        }
+
+        .upsell-section {
+            border-top: 1px solid #eef2f7;
+            padding-top: .9rem;
+            margin-top: .9rem;
+        }
+
+            .upsell-section:first-child {
+                border-top: none;
+                padding-top: 0;
+                margin-top: 0;
+            }
+
+        .upsell-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: .6rem;
+            margin-bottom: .25rem;
+        }
+
+        .upsell-title {
+            font-size: 1.02rem;
+            font-weight: 1000;
+        }
+
+        .upsell-sub {
+            color: #6b7280;
+            font-size: .9rem;
+            margin-bottom: .65rem;
+        }
+
+        .upsell-pill {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 48px;
+            height: 28px;
+            padding: 0 .55rem;
+            border-radius: 999px;
+            background: #f3f4f6;
+            color: #6b7280;
+            font-size: .82rem;
+            font-weight: 900;
+        }
+
+        .upsell-list {
+            display: grid;
+            gap: .5rem;
+        }
+
+        .upsell-row {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: .75rem;
+            align-items: center;
+            padding: .65rem 0;
+        }
+
+            .upsell-row + .upsell-row {
+                border-top: 1px solid #f1f5f9;
+            }
+
+        .upsell-left {
+            min-width: 0;
+        }
+
+        .upsell-name {
+            font-weight: 1000;
+            line-height: 1.25;
+        }
+
+        .upsell-meta {
+            margin-top: .2rem;
+            color: #6b7280;
+            font-size: .9rem;
+            display: flex;
+            flex-wrap: wrap;
+            gap: .35rem .55rem;
+            align-items: center;
+        }
+
+        .upsell-img-row {
+            display: grid;
+            grid-template-columns: 56px 1fr auto;
+            gap: .7rem;
+            align-items: center;
+            padding: .65rem 0;
+        }
+
+        .upsell-thumb {
+            width: 56px;
+            height: 56px;
+            object-fit: cover;
+            border-radius: 12px;
+            background: #eee;
+            border: 1px solid #f1f5f9;
+        }
+
+        .upsell-price {
+            font-weight: 1000;
+            color: #db2777;
+            white-space: nowrap;
+        }
+
+        .upsell-old {
+            color: #9ca3af;
+            text-decoration: line-through;
+            font-size: .9rem;
+        }
+
+        .upsell-controls {
+            display: flex;
+            align-items: center;
+            gap: .45rem;
+        }
+
+        .circle-btn {
+            width: 34px;
+            height: 34px;
+            border-radius: 999px;
+            border: 1px solid #d1d5db;
+            background: #fff;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+            line-height: 1;
+            cursor: pointer;
+            color: #374151;
+        }
+
+        .upsell-qty {
+            min-width: 1.4rem;
+            text-align: center;
+            font-weight: 1000;
+        }
+
+        .check-btn {
+            width: 28px;
+            height: 28px;
+            border-radius: 8px;
+            border: 2px solid #9ca3af;
+            background: #fff;
+            cursor: pointer;
+            position: relative;
+            flex: 0 0 auto;
+        }
+
+            .check-btn.active {
+                border-color: var(--orange);
+                background: #fff7ea;
+            }
+
+                .check-btn.active::after {
+                    content: '✓';
+                    position: absolute;
+                    inset: 0;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    color: var(--orange);
+                    font-weight: 1000;
+                }
+
+        .toast {
+            position: fixed;
+            left: 50%;
+            bottom: calc(92px + env(safe-area-inset-bottom));
+            transform: translateX(-50%);
+            background: rgba(15,23,42,.94);
+            color: #fff;
+            padding: .78rem 1rem;
+            border-radius: 14px;
+            z-index: 999;
+            font-weight: 900;
+            max-width: 86vw;
+            text-align: center;
+        }
+
+        .card-item.text-only {
+            padding: 0;
+            border-radius: 14px;
+            overflow: hidden;
+        }
+
+        .text-only-body {
+            padding: .9rem .95rem;
+            display: flex;
+            flex-direction: column;
+            gap: .35rem;
+        }
+
+        .card-title-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: .6rem;
+        }
+
+        .sold-text {
+            color: #dc2626;
+            font-weight: 1000;
+            white-space: nowrap;
+        }
+
+        .text-desc {
+            font-size: .9rem;
+            line-height: 1.35;
+            white-space: pre-line;
+        }
+
+        .text-only-upsell {
+            grid-template-columns: 1fr auto;
+        }
+
+            .text-only-upsell .upsell-left {
+                min-width: 0;
+            }
+
+        @media (max-width: 480px) {
+            :root {
+                --fab-right-gap: 16px;
+                --graffiti-overlap: -26px;
+            }
+
+            .topbar-inner {
+                gap: 8px;
+                padding-left: calc(env(safe-area-inset-left,0px) + .75rem + var(--left-pad));
+                padding-right: calc(env(safe-area-inset-right,0px) + .75rem);
+            }
+
+            .brand #logo {
+                height: 54px;
+                width: 54px;
+            }
+
+            .brand .graffiti {
+                height: 50px;
+                max-width: 180px;
+            }
+
+            .btn-ghost, .btn-cart {
+                padding: .42rem .7rem;
+                font-size: .92rem;
+            }
+
+            #openCartTop #txtCartTop {
+                display: none;
+            }
+
+            .container {
+                padding: .75rem;
+                padding-top: .6rem;
+                padding-left: calc(env(safe-area-inset-left,0px) + .75rem + var(--left-pad));
+                padding-right: calc(env(safe-area-inset-right,0px) + .75rem);
+            }
+
+            #page-menu.card, #page-home.card, #page-cart.card {
+                padding: .95rem;
+                border-radius: 14px;
+            }
+
+            .menu-head {
+                align-items: stretch;
+            }
+
+            .menu-head-actions {
+                width: 100%;
+                display: grid;
+                grid-template-columns: repeat(3, minmax(0,1fr));
+                gap: .45rem;
+            }
+
+                .menu-head-actions .btn-ghost {
+                    width: 100%;
+                    padding: .55rem .35rem;
+                    font-size: .92rem;
+                }
+
+            .tab {
+                flex: 0 0 66px;
+                min-width: 66px;
+                font-size: .94rem;
+                padding: .72rem .3rem;
+            }
+
+            .grid {
+                grid-template-columns: repeat(2,minmax(0,1fr));
+                gap: .6rem;
+            }
+
+            .dialog {
+                width: min(96vw, 420px);
+                max-height: 88vh;
+                padding: 1rem 1rem 1.15rem;
+                border-radius: 16px;
+            }
+
+            .upsell-img-row {
+                grid-template-columns: 48px 1fr auto;
+                gap: .55rem;
+            }
+
+            .upsell-thumb {
+                width: 48px;
+                height: 48px;
+            }
+
+            .fab {
+                right: 16px !important;
+                bottom: calc(16px + env(safe-area-inset-bottom)) !important;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <header class="topbar">
+        <div class="topbar-inner">
+            <div class="brand">
+                <img id="logo" src="/images/logo.jpg" alt="LOGO" />
+            </div>
+
+            <div class="topbar-actions">
+                <button class="btn-ghost" id="langToggle">EN</button>
+                <button class="btn-cart" id="openCartTop">🛒 <span id="txtCartTop">購物車</span> <span class="badge" id="cartCountTop">0</span></button>
+            </div>
+        </div>
+    </header>
+
+    <main class="container">
+        <section id="page-home" class="card">
+            <div class="store-info"></div>
+            <button class="btn-primary" id="goMenu">開始點餐</button>
+        </section>
+
+        <section id="page-menu" class="card" style="display:none">
+            <div class="menu-head">
+                <div style="font-weight:1000" id="txtMenuTitle">菜單</div>
+                <div class="menu-head-actions">
+                    <button class="btn-ghost" id="orderDetailBtn">訂單明細</button>
+                    <button class="btn-ghost" id="backHome">回首頁</button>
+                </div>
+            </div>
+
+            <div class="tabs" id="categoryTabs"></div>
+            <div id="menuLong"></div>
+        </section>
+
+        <section id="page-cart" class="card" style="display:none">
+            <div class="cart-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem;gap:.5rem">
+                <div style="font-weight:1000" id="txtCartTitle">購物車</div>
+                <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+                    <button class="btn-ghost" id="backToMenu">繼續點餐</button>
+                </div>
+            </div>
+
+            <div id="cartList"></div>
+
+            <div class="cart-footer" style="margin-top:1rem;display:flex;justify-content:space-between;align-items:center;gap:.75rem;flex-wrap:wrap">
+                <div style="font-weight:1000"><span id="txtTotal">總金額：</span><span id="cartTotal">＄0</span></div>
+                <button class="btn-primary" id="sendOrder">送出訂單</button>
+            </div>
+        </section>
+    </main>
+
+    <button class="fab" id="openCartFab">🛒 <span id="txtCartFab">購物車</span> <span class="badge" id="cartCountFab">0</span></button>
+
+    <div class="modal" id="itemModal">
+        <div class="dialog">
+            <div class="x" data-close="itemModal">&times;</div>
+            <h3 id="mName" style="margin:.2rem 0 .2rem"></h3>
+            <div class="muted" id="mPrice"></div>
+            <div class="muted preline" id="mDesc" style="margin-top:.25rem"></div>
+
+            <div id="addonWrap" style="margin-top:.7rem;display:none">
+                <label style="font-weight:1000" id="txtAddons">加價項</label>
+                <div id="addonBox" style="display:grid;gap:.35rem;margin-top:.35rem"></div>
+            </div>
+
+            <div id="tempWrap" style="margin-top:.7rem;display:none">
+                <label style="font-weight:1000" id="txtTemp">溫度</label>
+                <div id="tempBox" style="display:flex;gap:.5rem;margin-top:.35rem;flex-wrap:wrap"></div>
+            </div>
+
+            <div id="upsellWrap" class="upsell-wrap" style="display:none">
+                <div id="upsellBox"></div>
+            </div>
+
+            <div style="display:flex;align-items:center;gap:12px;margin:1rem 0 .2rem">
+                <button class="btn-ghost" id="qtyMinus">－</button>
+                <div id="mQty" style="min-width:2rem;text-align:center;font-weight:1000">1</div>
+                <button class="btn-ghost" id="qtyPlus">＋</button>
+            </div>
+            <button class="btn-full" id="addToCart">加入購物車</button>
+        </div>
+    </div>
+
+    <div class="modal" id="welcomeModal">
+        <div class="dialog">
+            <div class="x" data-close="welcomeModal">&times;</div>
+            <div class="welcome-title" id="welcomeTitle">歡迎用餐</div>
+
+            <div class="welcome-section" id="secNewOrder">
+                <div class="welcome-sub" id="orderTypeTitle">請選擇用餐方式</div>
+                <div class="welcome-desc" id="orderTypeDesc">選擇後即可建立新訂單，送出後如需加點請重新掃碼</div>
+                <div class="order-type-grid" role="group" aria-labelledby="orderTypeTitle">
+                    <button type="button" class="order-type-btn" data-order-type="dinein" id="dineInBtn">內用</button>
+                    <button type="button" class="order-type-btn" data-order-type="takeout" id="takeOutBtn">外帶</button>
+                </div>
+                <button class="btn-orange" id="startNewOrderBtn">開始一張新訂單</button>
+            </div>
+
+            <button class="btn-soft" id="welcomeLaterBtn" data-close="welcomeModal">先不要</button>
+        </div>
+    </div>
+
+    <div class="modal" id="orderDetailModal">
+        <div class="dialog">
+            <div class="x" data-close="orderDetailModal">&times;</div>
+            <div class="welcome-title" id="odTitle">訂單明細</div>
+            <div class="muted" id="odHint" style="margin:.15rem 0 .75rem;">載入中…</div>
+
+            <div id="odMeta" style="display:none">
+                <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+                    <span class="pill" id="odIdPill">🧾 訂單號 <span class="order-no">#0</span></span>
+                    <span class="pill" id="odTimePill">🕒 --</span>
+                </div>
+                <div style="margin-top:.8rem;font-weight:1000;display:flex;justify-content:space-between;align-items:center">
+                    <div>已送出內容</div>
+                    <div id="odTotalTop">＄0</div>
+                </div>
+            </div>
+
+            <div id="odList" style="margin-top:.7rem;"></div>
+            <div id="checkoutNotice" style="
+    margin-top: 1rem;
+    margin-bottom: .2rem;
+    padding: 1rem 1.1rem;
+    border-radius: 16px;
+    background: linear-gradient(160deg, #ff8a00, #ff6a00);
+    color: #fff;
+    font-weight: 1000;
+    font-size: 1.05rem;
+    text-align: center;
+    box-shadow: 0 10px 24px rgba(255,138,0,.22);
+    letter-spacing: .03em;
+">
+                ⚠️ 請至櫃檯結帳，如需加點請重新掃碼
+            </div>
+
+            <button class="btn-soft" data-close="orderDetailModal">關閉</button>
+        </div>
+    </div>
+
+    <div class="modal" id="returnHomeConfirmModal">
+        <div class="dialog">
+            <div class="welcome-title" id="returnHomeTitle">確認回首頁？</div>
+            <div class="welcome-desc" id="returnHomeDesc">回首頁後，本次訂單明細會從此裝置清除。</div>
+            <div class="confirm-actions">
+                <button class="btn-soft" data-close="returnHomeConfirmModal" id="returnHomeCancelBtn">留在明細</button>
+                <button class="btn-full" id="returnHomeConfirmBtn">回首頁</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const DEFAULT_API = "https://pt-production.up.railway.app";
+        const apiOverride = new URLSearchParams(window.location.search).get('api');
+        if (apiOverride) localStorage.setItem('partnerBaseApi', apiOverride.replace(/\/+$/, ''));
+        const BASE_API = (apiOverride || localStorage.getItem('partnerBaseApi') || DEFAULT_API).replace(/\/+$/, '');
+        const SOCKET_URL = BASE_API;
+
+        const LANGS = ['zh', 'en'];
+        let lang = localStorage.getItem('lang') || 'zh';
+
+        const I18N = {
+            cart: { zh: '購物車', en: 'Cart' },
+            startOrder: { zh: '開始點餐', en: 'Start Order' },
+            orderTypeTitle: { zh: '請選擇用餐方式', en: 'Choose dining type' },
+            orderTypeDesc: { zh: '選擇後即可建立新訂單，送出後如需加點請重新掃碼', en: 'Choose one to create a new order. Rescan to add more after submitting.' },
+            dineIn: { zh: '內用', en: 'Dine In' },
+            takeOut: { zh: '外帶', en: 'Takeout' },
+            chooseOrderType: { zh: '請先選擇內用或外帶', en: 'Please choose dine in or takeout first' },
+            menuTitle: { zh: '菜單', en: 'Menu' },
+            backHome: { zh: '回首頁', en: 'Home' },
+            keepOrder: { zh: '繼續點餐', en: 'Continue' },
+            cartTitle: { zh: '購物車', en: 'Cart' },
+            total: { zh: '總金額：', en: 'Total: ' },
+            sendOrder: { zh: '送出訂單', en: 'Place Order' },
+            addons: { zh: '加價項', en: 'Add-ons' },
+            delete: { zh: '刪除', en: 'Delete' },
+            sold: { zh: '售完', en: 'Sold out' },
+            tempLabel: { zh: '溫度', en: 'Temperature' },
+            orderDetail: { zh: '訂單明細', en: 'Order Details' },
+            submitReviewTitle: { zh: '確認訂單明細', en: 'Confirm Order Details' },
+            submitReviewWaiting: { zh: '請稍候 {sec} 秒後即可送出', en: 'Please wait {sec}s before submitting' },
+            submitReviewReady: { zh: '內容確認完成，可以送出訂單', en: 'Review complete. Ready to submit.' },
+            submitReviewButton: { zh: '確認送出訂單', en: 'Confirm and Submit' },
+            submitReviewClose: { zh: '取消', en: 'Cancel' },
+            submitReviewCloseDone: { zh: '關閉並回首頁', en: 'Close and Return Home' },
+            submitReviewCurrent: { zh: '本次送出內容', en: 'Order Summary' },
+            submitReviewOrderCode: { zh: '🧾 訂單號', en: '🧾 Order No.' },
+            submitReviewSessionCode: { zh: '🧾 訂單代碼', en: '🧾 Order Code' },
+            submitReviewTime: { zh: '🕒 確認時間', en: '🕒 Review Time' },
+            submitSuccessToast: { zh: '訂單已送出', en: 'Order submitted' },
+            noOrderYet: { zh: '尚未送出訂單', en: 'Order not submitted yet' },
+            tempOptions: { cold: { zh: '冰', en: 'Cold' }, hot: { zh: '熱', en: 'Hot' } },
+            checkoutNotice: { zh: '⚠️ 請至櫃檯結帳，如需加點請重新掃碼', en: '⚠️ Please pay at the counter. Rescan to add more items.' },
+            returnHomeTitle: { zh: '確認回首頁？', en: 'Return Home?' },
+            returnHomeDesc: { zh: '回首頁後，本次訂單明細會從此裝置清除。', en: 'This order summary will be cleared from this device.' },
+            returnHomeStay: { zh: '留在明細', en: 'Stay Here' },
+            returnHomeConfirm: { zh: '回首頁', en: 'Return Home' },
+            home: {
+                openTitle: { zh: 'OPEN', en: 'OPEN' },
+                closeTitle: { zh: 'CLOSE', en: 'CLOSE' },
+                openLines: {
+                    zh: ['18:00—01:00。', '最後接客點餐時間 00:30 或售完為止。'],
+                    en: ['6:00PM—01:00PM.', 'Last order at 00:30PM or while supplies last.']
+                },
+                closeLine: { zh: '無固定店休，請關注 PARTNER 粉絲專頁及 Instagram。', en: 'Check Facebook and Instagram for store updates.' },
+                notesTitle: { zh: '須知', en: 'Notes' },
+                notes: {
+                    zh: ['• 本店採自助式，餐後請協助清理桌面至回收檯分類。', '• 本店禁帶外食。', '• 每人低消一杯飲品或一份餐點。', '• 為維護餐點品質，餐點結帳後不能再更改。', '• 請勿奔跑嬉戲，以免造成危險。'],
+                    en: ['• Self-service after dining.', '• No outside food.', '• Minimum order: one drink or one meal.', '• Orders cannot be changed after payment.', '• No running or rough play.']
+                }
+            },
+            categories: {
+                combo: { zh: '吃堡', en: 'Combo' },
+                single: { zh: '單點', en: 'A La carte' },
+                coffee: { zh: '咖啡', en: 'Coffee' },
+                desserts: { zh: '甜點', en: 'Desserts' },
+                drinks: { zh: '飲品', en: 'Drinks' }
+            },
+            popular: { zh: '最多人點', en: 'Most Popular' },
+            optional: { zh: '可選', en: 'Optional' },
+            cartExtras: { zh: '加購', en: 'Extras' }
+        };
+
+        const MENU = [
+            {
+                key: 'Combo',
+                title: I18N.categories.combo,
+                items: [
+                    { name: '4oz經典起司牛肉堡', enName: 'Classic Cheeseburger', price: 155, img: 'images/items/no.jpg', desc: '⚫ 附贈薯條、洋蔥圈。', enDesc: '⚫ Includes fries and onion rings.' },
+                    { name: '花醬熔岩起司牛肉堡', enName: 'Peanut Butter Cheeseburger', price: 160, img: 'images/items/no.jpg', desc: '⚫ 附贈薯條、洋蔥圈。', enDesc: '⚫ Includes fries and onion rings.' },
+                    { name: '焦糖洋蔥起司牛肉堡', enName: 'Caramelized Onion Cheeseburger', price: 170, img: 'images/items/no.jpg', desc: '⚫ 附贈薯條、洋蔥圈。', enDesc: '⚫ Includes fries and onion rings.' },
+                    { name: '辣肉醬起司牛肉堡🌶️', enName: 'Spicy Meat Sauce Cheeseburger', price: 180, img: 'images/items/no.jpg', desc: '⚫ 附贈薯條、洋蔥圈。', enDesc: '⚫ Includes fries and onion rings.' },
+                    { name: 'BBQ培根起司牛肉堡', enName: 'BBQ Bacon Cheeseburger', price: 200, img: 'images/items/no.jpg', desc: '⚫ 附贈薯條、洋蔥圈。', enDesc: '⚫ Includes fries and onion rings.' },
+                    { name: '經典雙層起司牛肉堡', enName: 'Classic Double Cheeseburger', price: 210, img: 'images/items/no.jpg', desc: '⚫ 附贈薯條、洋蔥圈。', enDesc: '⚫ Includes fries and onion rings.' },
+                    { name: '經典塔塔雞腿堡', enName: 'Classic Chicken Burger', price: 150, img: 'images/items/no.jpg', desc: '⚫ 附贈薯條、洋蔥圈。', enDesc: '⚫ Includes fries and onion rings.' },
+                    { name: '焦糖洋蔥雞腿堡', enName: 'Caramelized Onion Chicken Burger', price: 160, img: 'images/items/no.jpg', desc: '⚫ 附贈薯條、洋蔥圈。', enDesc: '⚫ Includes fries and onion rings.' },
+                    { name: '辣肉醬雞腿堡🌶️', enName: 'Spicy Meat Sauce Chicken Burger', price: 170, img: 'images/items/no.jpg', desc: '⚫ 附贈薯條、洋蔥圈。', enDesc: '⚫ Includes fries and onion rings.' },
+                    { name: 'BBQ培根雞腿堡', enName: 'BBQ Bacon Chicken Burger', price: 190, img: 'images/items/no.jpg', desc: '⚫ 附贈薯條、洋蔥圈。', enDesc: '⚫ Includes fries and onion rings.' }
+                ]
+            },
+            {
+                key: 'single',
+                title: I18N.categories.single,
+                items: [
+                    { name: '脆薯', enName: 'Fries', price: 60, img: 'images/items/no.jpg', desc: '', enDesc: '' },
+                    { name: '雞塊', enName: 'Chicken nuggets', price: 70, img: 'images/items/no.jpg', desc: '', enDesc: '' },
+                    { name: '美式炸雞(兩塊)', enName: 'Crispy fried chicken', price: 110, img: 'images/items/no.jpg', desc: '', enDesc: '' },
+                    { name: '洋蔥圈', enName: 'Onion rings', price: 60, img: 'images/items/no.jpg', desc: '', enDesc: '' },
+                    { name: '辣肉醬脆薯🌶️', enName: 'Fries with spicy meat sauce', price: 75, img: 'images/items/no.jpg', desc: '', enDesc: '' },
+                    { name: '溫雞肉沙拉/巴薩米克醋', enName: 'Warm chicken salad with balsamic vinegar', price: 100, img: 'images/items/no.jpg', desc: '', enDesc: '' }
+                ]
+            },
+            {
+                key: 'coffee',
+                title: I18N.categories.coffee,
+                items: [
+                    { name: '美式咖啡', enName: 'Americano', price: 55, img: 'images/items/no.jpg', desc: '⚫ 無糖。\n⚫ 冰塊皆微冰，需去冰請先告知。', enDesc: '⚫ Unsweetened.\n⚫ Drinks come with light ice. Please let us know in advance if you want no ice.', tempOptions: ['cold', 'hot'] },
+                    { name: '拿鐵咖啡', enName: 'Coffee Latte', price: 70, img: 'images/items/no.jpg', desc: '⚫ 無糖。\n⚫ 冰塊皆微冰，需去冰請先告知。', enDesc: '⚫ Unsweetened.\n⚫ Drinks come with light ice. Please let us know in advance if you want no ice.', tempOptions: ['cold', 'hot'] },
+                    { name: '海鹽焦糖拿鐵', enName: 'Salted Caramel Latte', price: 90, img: 'images/items/no.jpg', desc: '⚫ 飲品甜度固定。\n⚫ 冰塊皆微冰，需去冰請先告知。', enDesc: '⚫ Sweetness level is fixed.\n⚫ Drinks come with light ice. Please let us know in advance if you want no ice.', tempOptions: ['cold', 'hot'] },
+                    { name: '巧克力摩卡拿鐵', enName: 'Mocha Latte', price: 100, img: 'images/items/no.jpg', desc: '⚫ 飲品甜度固定。\n⚫ 冰塊皆微冰，需去冰請先告知。', enDesc: '⚫ Sweetness level is fixed.\n⚫ Drinks come with light ice. Please let us know in advance if you want no ice.', tempOptions: ['cold', 'hot'] }
+                ]
+            },
+            {
+                key: 'desserts',
+                title: I18N.categories.desserts,
+                hidden: true,
+                items: []
+            },
+            {
+                key: 'drinks',
+                title: I18N.categories.drinks,
+                items: [
+                    { name: '綠茶', enName: 'Green Tea', price: 40, img: 'images/items/no.jpg', desc: '⚫ 飲品甜度固定。\n⚫ 冰塊皆微冰，需去冰請先告知。', enDesc: '\n• Fixed sweetness.\n• Light ice by default.', tempOptions: ['cold', 'hot'] },
+                    { name: '紅茶', enName: 'Black Tea', price: 40, img: 'images/items/no.png', desc: '⚫ 飲品甜度固定。\n⚫ 冰塊皆微冰，需去冰請先告知。', enDesc: '\n• Fixed sweetness.\n• Light ice by default.', tempOptions: ['cold', 'hot'] },
+                    { name: '鮮奶紅茶', enName: 'Black Tea Latte', price: 50, img: 'images/items/no.jpg', desc: '⚫ 飲品甜度固定。\n⚫ 冰塊皆微冰，需去冰請先告知。', enDesc: '\n• Fixed sweetness.\n• Light ice by default.', tempOptions: ['cold', 'hot'] },
+                    { name: '焦糖鮮奶茶', enName: 'Caramel Black Tea Latte', price: 60, img: 'images/items/no.png', desc: '⚫ 飲品甜度固定。\n⚫ 冰塊皆微冰，需去冰請先告知。', enDesc: '\n• Fixed sweetness.\n• Light ice by default.', tempOptions: ['cold', 'hot'] },
+                    { name: '巧克力可可牛奶', enName: 'Chocolate Milk', price: 70, img: 'images/items/no.png', desc: '⚫ 飲品甜度固定。\n⚫ 冰塊皆微冰，需去冰請先告知。', enDesc: '\n• Fixed sweetness.\n• Light ice by default.', tempOptions: ['cold', 'hot'] },
+                    { name: '可口可樂', enName: 'Coca-Cola', price: 40, img: 'images/items/no.jpg', desc: '', enDesc: '', tempOptions: ['cold'] },
+                    { name: '雪碧', enName: 'Sprite', price: 40, img: 'images/items/no.jpg', desc: '', enDesc: '', tempOptions: ['cold'] }
+                ]
+            }
+        ];
+
+        const UPSELL_TEMPLATES = {
+            Combo: [
+                {
+                    key: 'upgrade_fries',
+                    title: { zh: '升級套餐薯條', en: 'Upgrade Your Fries' },
+                    subtitle: { zh: '加 20 元升級成辣肉醬薯條', en: 'Upgrade to spicy meat sauce fries for +20' },
+                    type: 'checkbox',
+                    items: [
+                        { key: 'spicy_fries_upgrade', name: '升級辣肉醬薯條 +20', enName: 'Upgrade to spicy meat sauce fries +20', price: 20, qty: 0, img: 'images/items/no.jpg', soldoutKeys: ['辣肉醬脆薯🌶️'] }
+                    ]
+                },
+                {
+                    key: 'drink',
+                    title: { zh: '加購飲品', en: 'Add a Drink' },
+                    subtitle: { zh: '一起加購更方便', en: 'Quickly add a drink' },
+                    type: 'stepper',
+                    maxTotal: 4,
+                    items: [
+                        { key: 'green_tea', name: '綠茶', enName: 'Green Tea', price: 40, qty: 0, tempSelectable: true, temp: 'cold' },
+                        { key: 'black_tea', name: '紅茶', enName: 'Black Tea', price: 40, qty: 0, tempSelectable: true, temp: 'cold' },
+                        { key: 'milk_tea', name: '鮮奶紅茶', enName: 'Black Tea Latte', price: 50, qty: 0, tempSelectable: true, temp: 'cold' },
+                        { key: 'coke', name: '可口可樂', enName: 'Coca-Cola', price: 40, qty: 0, tempSelectable: true, temp: 'cold' },
+                        { key: 'sprite', name: '雪碧', enName: 'Sprite', price: 40, qty: 0, tempSelectable: true, temp: 'cold' }
+                    ]
+                },
+                {
+                    key: 'often',
+                    title: { zh: '經常一起訂購的商品', en: 'Often ordered together' },
+                    subtitle: { zh: '順手加購', en: 'Quick picks' },
+                    type: 'checkbox',
+                    items: [
+                        { key: 'fries', name: '脆薯', enName: 'Fries', price: 60, qty: 0, img: 'images/items/no.jpg' },
+                        { key: 'nuggets', name: '雞塊', enName: 'Chicken Nuggets', price: 70, qty: 0, img: 'images/items/no.jpg' },
+                        { key: 'fried_chicken', name: '美式炸雞(兩塊)', enName: 'Crispy Fried Chicken', price: 110, qty: 0, img: 'images/items/no.jpg' }
+                    ]
+                }
+            ],
+            desserts: [
+                {
+                    key: 'drink',
+                    title: { zh: '加購飲品', en: 'Add a Drink' },
+                    subtitle: { zh: '一起加購更方便', en: 'Quickly add a drink' },
+                    type: 'stepper',
+                    maxTotal: 4,
+                    items: [
+                        { key: 'green_tea', name: '綠茶', enName: 'Green Tea', price: 40, qty: 0, tempSelectable: true, temp: 'cold' },
+                        { key: 'black_tea', name: '紅茶', enName: 'Black Tea', price: 40, qty: 0, tempSelectable: true, temp: 'cold' },
+                        { key: 'milk_tea', name: '鮮奶紅茶', enName: 'Black Tea Latte', price: 50, qty: 0, tempSelectable: true, temp: 'cold' },
+                        { key: 'coke', name: '可口可樂', enName: 'Coca-Cola', price: 40, qty: 0, tempSelectable: true, temp: 'cold' },
+                        { key: 'sprite', name: '雪碧', enName: 'Sprite', price: 40, qty: 0, tempSelectable: true, temp: 'cold' }
+                    ]
+                }
+            ],
+            single: [
+                {
+                    key: 'drink',
+                    title: { zh: '加購飲品', en: 'Add a Drink' },
+                    subtitle: { zh: '一起加購更方便', en: 'Quickly add a drink' },
+                    type: 'stepper',
+                    maxTotal: 4,
+                    items: [
+                        { key: 'green_tea', name: '綠茶', enName: 'Green Tea', price: 40, qty: 0, tempSelectable: true, temp: 'cold' },
+                        { key: 'black_tea', name: '紅茶', enName: 'Black Tea', price: 40, qty: 0, tempSelectable: true, temp: 'cold' },
+                        { key: 'milk_tea', name: '鮮奶紅茶', enName: 'Black Tea Latte', price: 50, qty: 0, tempSelectable: true, temp: 'cold' },
+                        { key: 'coke', name: '可口可樂', enName: 'Coca-Cola', price: 40, qty: 0, tempSelectable: true, temp: 'cold' },
+                        { key: 'sprite', name: '雪碧', enName: 'Sprite', price: 40, qty: 0, tempSelectable: true, temp: 'cold' }
+                    ]
+                }
+            ],
+            drinks: [],
+            coffee: []
+        };
+
+        let socket = null;
+        let cart = [];
+        let total = 0;
+        let users = [];
+        let locks = {};
+        let tempItem = null;
+        let lastOrderDetail = null;
+        let mySocketId = null;
+        let soldoutTimer = null;
+        let activeTab = 0;
+        let sectionSpyHandler = null;
+        let switchCooldown = false;
+        let touchStartY = 0;
+        let wheelUpAccum = 0;
+        let wheelDownAccum = 0;
+        let submitPreviewTimer = null;
+        let submitPreviewRemain = 0;
+        let submitPreviewMode = false;
+        let submitPreviewSubmitted = false;
+        let submitPreviewSnapshot = null;
+        const SUBMITTED_ORDER_KEY = 'partner_last_submitted_order';
+
+        const CLIENT_LIMITS = {
+            nicknameMaxLen: 12,
+            maxQtyPerLine: 20,
+            maxLinesInCart: 80,
+            maxAddonsPerItem: 8,
+            maxExtrasPerItem: 8,
+            maxPrice: 9999,
+            emitMinGapMs: 350,
+            submitCooldownMs: 4000,
+            joinCooldownMs: 1500,
+            addCartCooldownMs: 800,
+            qtyCooldownMs: 450,
+            removeCooldownMs: 450,
+            orderDetailCooldownMs: 1000,
+            nicknameCooldownMs: 800
+        };
+
+        const EMIT_GUARD = new Map();
+        let submitBusy = false;
+        let joinBusy = false;
+        let addCartBusy = false;
+        let orderDetailBusy = false;
+        let selectedOrderType = null;
+
+        function nowTs() {
+            return Date.now();
+        }
+
+        function allowAction(key, gapMs) {
+            const now = nowTs();
+            const last = Number(EMIT_GUARD.get(key) || 0);
+            if ((now - last) < gapMs) return false;
+            EMIT_GUARD.set(key, now);
+            return true;
+        }
+
+        function sanitizeText(raw, maxLen = 60) {
+            return String(raw || '')
+                .replace(/[\u0000-\u001f\u007f]/g, '')
+                .replace(/[<>`"'\\]/g, '')
+                .replace(/\s+/g, ' ')
+                .trim()
+                .slice(0, maxLen);
+        }
+
+        function sanitizeNickname(raw) {
+            let v = sanitizeText(raw, CLIENT_LIMITS.nicknameMaxLen);
+            if (!v) return '';
+            const blockedExact = new Set(['店員', '老闆', '櫃檯', '管理員', '系統管理員', '客服', 'admin', 'administrator', 'staff', 'owner', 'system']);
+            if (blockedExact.has(v) || blockedExact.has(v.toLowerCase())) v = '訪客';
+            return v;
+        }
+
+        function clampInt(n, min, max, fallback = min) {
+            const v = Number(n);
+            if (!Number.isFinite(v)) return fallback;
+            return Math.min(max, Math.max(min, Math.floor(v)));
+        }
+
+        function safePrice(n) {
+            return clampInt(n, 0, CLIENT_LIMITS.maxPrice, 0);
+        }
+
+        function normalizeAddOn(a) {
+            if (!a || typeof a !== 'object') return null;
+            const name = sanitizeText(a.name || '', 40);
+            if (!name) return null;
+            return { key: sanitizeText(a.key || name, 40), name, enName: sanitizeText(a.enName || '', 60), price: safePrice(a.price) };
+        }
+
+        function normalizeExtra(ex) {
+            if (!ex || typeof ex !== 'object') return null;
+            const name = sanitizeText(ex.name || '', 50);
+            if (!name) return null;
+            const temp = ex.temp === 'hot' ? 'hot' : (ex.temp === 'cold' ? 'cold' : null);
+            return {
+                key: sanitizeText(ex.key || name, 50),
+                name,
+                enName: sanitizeText(ex.enName || '', 60),
+                price: safePrice(ex.price),
+                qty: clampInt(ex.qty, 1, CLIENT_LIMITS.maxQtyPerLine, 1),
+                temp,
+                tempSelectable: !!ex.tempSelectable,
+                category: sanitizeText(ex.category || '', 20)
+            };
+        }
+
+        function normalizeCartItem(item) {
+            if (!item || typeof item !== 'object') return null;
+            const name = sanitizeText(item.name || '', 60);
+            if (!name) return null;
+            const addOns = Array.isArray(item.addOns) ? item.addOns.map(normalizeAddOn).filter(Boolean).slice(0, CLIENT_LIMITS.maxAddonsPerItem) : [];
+            const extras = Array.isArray(item.extras) ? item.extras.map(normalizeExtra).filter(Boolean).slice(0, CLIENT_LIMITS.maxExtrasPerItem) : [];
+            const temp = item.temp === 'hot' ? 'hot' : (item.temp === 'cold' ? 'cold' : null);
+            return {
+                key: sanitizeText(item.key || name, 60),
+                name,
+                enName: sanitizeText(item.enName || '', 80),
+                price: safePrice(item.price),
+                qty: clampInt(item.qty, 1, CLIENT_LIMITS.maxQtyPerLine, 1),
+                addOns,
+                extras,
+                temp,
+                addedBy: sanitizeNickname(item.addedBy || '') || '訪客',
+                category: sanitizeText(item.category || '', 20),
+                lineId: sanitizeText(item.lineId || `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, 80)
+            };
+        }
+
+        function normalizeCartPayload(arr) {
+            if (!Array.isArray(arr)) return [];
+            return arr.map(normalizeCartItem).filter(Boolean).slice(0, CLIENT_LIMITS.maxLinesInCart);
+        }
+
+        function trustedSoldMemoryKey() {
+            return 'soldItems_remote_cache';
+        }
+
+        function safeSocketEmit(eventName, payload, opt = {}) {
+            connectSocket();
+            if (!socket || !socket.connected) return false;
+            const guardKey = opt.guardKey || eventName;
+            const gapMs = opt.gapMs || CLIENT_LIMITS.emitMinGapMs;
+            if (!allowAction(guardKey, gapMs)) return false;
+            socket.emit(eventName, payload);
+            return true;
+        }
+
+        function createRequestId(prefix = 'web-order') {
+            const rand = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+            return `${prefix}-${rand}`;
+        }
+
+        const $ = s => document.querySelector(s);
+        const $$ = s => Array.from(document.querySelectorAll(s));
+        const t = k => I18N[k]?.[lang] ?? '';
+        const tz = obj => obj?.[lang] ?? obj?.zh ?? '';
+
+        function show(el) { if (el) el.style.display = ''; }
+        function hide(el) { if (el) el.style.display = 'none'; }
+        function isVisible(el) { return !!el && getComputedStyle(el).display !== 'none'; }
+        const displayName = i => (lang === 'en' && i.enName) ? i.enName : i.name;
+        const displayDesc = i => ((lang === 'en' && i.enDesc) ? i.enDesc : i.desc) || '';
+
+        function escapeHtml(str = '') {
+            return String(str).replace(/[&<>"']/g, m => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;'
+            }[m]));
+        }
+
+        function toast(msg) {
+            const old = document.querySelector('.toast');
+            if (old) old.remove();
+            const div = document.createElement('div');
+            div.className = 'toast';
+            div.textContent = msg;
+            document.body.appendChild(div);
+            setTimeout(() => div.remove(), 1800);
+        }
+
+        function stopSubmitPreviewCountdown() {
+            if (submitPreviewTimer) {
+                clearInterval(submitPreviewTimer);
+                submitPreviewTimer = null;
+            }
+        }
+
+        function resetSubmitPreviewState() {
+            stopSubmitPreviewCountdown();
+            submitPreviewMode = false;
+            submitPreviewSubmitted = false;
+            submitPreviewRemain = 0;
+            submitPreviewSnapshot = null;
+            const wrap = $('#odSubmitWrap');
+            if (wrap) wrap.style.display = 'none';
+        }
+
+        function setOrderNoPill(label, value, isOrderNo = true) {
+            const pill = $('#odIdPill');
+            if (!pill) return;
+            pill.style.display = '';
+            const cls = isOrderNo ? 'order-no' : 'order-code';
+            const display = String(value || t('noOrderYet')).trim();
+            const prefix = /^\d+$/.test(display) ? '#' : '';
+            pill.innerHTML = `${escapeHtml(label)} <span class="${cls}">${prefix}${escapeHtml(display)}</span>`;
+        }
+
+        function hideOrderNoPill() {
+            const pill = $('#odIdPill');
+            if (!pill) return;
+            pill.style.display = 'none';
+        }
+
+        function saveSubmittedOrderSnapshot() {
+            if (!submitPreviewSnapshot) return;
+            localStorage.setItem(SUBMITTED_ORDER_KEY, JSON.stringify({
+                snapshot: submitPreviewSnapshot,
+                savedAt: Date.now()
+            }));
+        }
+
+        function loadSubmittedOrderSnapshot() {
+            try {
+                const raw = JSON.parse(localStorage.getItem(SUBMITTED_ORDER_KEY) || 'null');
+                if (!raw || !raw.snapshot || !Array.isArray(raw.snapshot.items)) return null;
+                return raw.snapshot;
+            } catch {
+                return null;
+            }
+        }
+
+        function clearSubmittedOrderSnapshot() {
+            localStorage.removeItem(SUBMITTED_ORDER_KEY);
+        }
+
+        function restoreSubmittedOrderModal() {
+            const snapshot = loadSubmittedOrderSnapshot();
+            if (!snapshot) return false;
+            submitPreviewMode = true;
+            submitPreviewSubmitted = true;
+            submitPreviewRemain = 0;
+            submitPreviewSnapshot = snapshot;
+            renderSubmitPreviewDetail();
+            openModal('orderDetailModal');
+            return true;
+        }
+
+        function confirmReturnHomeFromSubmitted() {
+            $('#returnHomeTitle').textContent = I18N.returnHomeTitle[lang];
+            $('#returnHomeDesc').textContent = I18N.returnHomeDesc[lang];
+            $('#returnHomeCancelBtn').textContent = I18N.returnHomeStay[lang];
+            $('#returnHomeConfirmBtn').textContent = I18N.returnHomeConfirm[lang];
+            openModal('returnHomeConfirmModal');
+        }
+
+        function finishSubmittedAndGoHome() {
+            closeModal('returnHomeConfirmModal');
+            $('#orderDetailModal')?.classList.remove('show');
+            resetSubmitPreviewState();
+            clearSubmittedOrderSnapshot();
+            clearOrderSession();
+            restoreWelcomeModalFull();
+            goHome();
+        }
+
+        function openModal(id) {
+            $('#' + id)?.classList.add('show');
+        }
+
+        function closeModal(id) {
+            const modal = $('#' + id);
+            if (!modal) return;
+            modal.classList.remove('show');
+
+            if (id === 'orderDetailModal') {
+                stopSubmitPreviewCountdown();
+                if (submitPreviewSubmitted) {
+                    modal.classList.add('show');
+                    confirmReturnHomeFromSubmitted();
+                    return;
+                }
+                if (submitPreviewMode) {
+                    resetSubmitPreviewState();
+                }
+            }
+        }
+
+        function ensureSubmitReviewUi() {
+            const dialog = $('#orderDetailModal .dialog');
+            if (!dialog || $('#odSubmitWrap')) return;
+
+            const closeBtn = $('#orderDetailModal .btn-soft[data-close="orderDetailModal"]');
+            const wrap = document.createElement('div');
+            wrap.id = 'odSubmitWrap';
+            wrap.style.display = 'none';
+            wrap.innerHTML = `
+                <div id="odSubmitHint" class="muted" style="display:none;margin-top:1rem;font-weight:1000;"></div>
+                <button class="btn-full" id="odSubmitConfirmBtn" style="margin-top:1rem;"></button>
+            `;
+            dialog.insertBefore(wrap, closeBtn);
+
+            $('#odSubmitConfirmBtn').onclick = () => {
+                const id = getOrderId();
+                if (!submitPreviewMode || submitPreviewSubmitted) return;
+                if (!id) {
+                    toast(lang === 'zh' ? '請先建立訂單' : 'Please create an order first');
+                    return;
+                }
+                if (submitPreviewRemain > 0) return;
+                if (!cart.length) {
+                    toast(lang === 'zh' ? '購物車目前沒有商品' : 'Cart is empty');
+                    return;
+                }
+                if (submitBusy) return;
+                if (!allowAction(`submit:${id}`, CLIENT_LIMITS.submitCooldownMs)) {
+                    toast(lang === 'zh' ? '送出太快，請稍後再試' : 'Too fast. Please try again later.');
+                    return;
+                }
+                submitBusy = true;
+                $('#sendOrder').disabled = true;
+                setSubmitReviewState();
+                connectSocket();
+                const submitItems = normalizeCartPayload(submitPreviewSnapshot?.items || cart);
+                const requestId = createRequestId();
+                if (submitPreviewSnapshot) {
+                    submitPreviewSnapshot.items = submitItems;
+                    submitPreviewSnapshot.requestId = requestId;
+                }
+                console.info('[order-submit][frontend]', {
+                    requestId,
+                    sessionId: id,
+                    table: getOrderTableValue(),
+                    items: submitItems,
+                    total: calcCartTotal(submitItems)
+                });
+                const ok = safeSocketEmit("submit_cart_as_order", {
+                    requestId,
+                    sessionId: id,
+                    table: getOrderTableValue(),
+                    items: submitItems,
+                    total: calcCartTotal(submitItems)
+                }, { guardKey: `submit_emit:${id}`, gapMs: CLIENT_LIMITS.submitCooldownMs });
+                if (!ok) {
+                    submitBusy = false;
+                    $('#sendOrder').disabled = false;
+                    setSubmitReviewState();
+                }
+            };
+        }
+
+        function setSubmitReviewState() {
+            ensureSubmitReviewUi();
+            const wrap = $('#odSubmitWrap');
+            const hint = $('#odSubmitHint');
+            const btn = $('#odSubmitConfirmBtn');
+            const closeBtn = $('#orderDetailModal .btn-soft[data-close="orderDetailModal"]');
+            if (!wrap || !hint || !btn || !closeBtn) return;
+
+            if (!submitPreviewMode) {
+                wrap.style.display = 'none';
+                closeBtn.textContent = t('submitReviewClose');
+                hint.textContent = '';
+                return;
+            }
+
+            wrap.style.display = '';
+            closeBtn.textContent = submitPreviewSubmitted ? t('submitReviewCloseDone') : t('submitReviewClose');
+
+            if (submitPreviewSubmitted) {
+                hint.textContent = '';
+                btn.style.display = 'none';
+                return;
+            }
+
+            btn.style.display = '';
+            if (submitPreviewRemain > 0) {
+                hint.textContent = '';
+                btn.textContent = t('submitReviewWaiting').replace('{sec}', submitPreviewRemain);
+                btn.disabled = true;
+            } else if (submitBusy) {
+                hint.textContent = '';
+                btn.textContent = lang === 'zh' ? '送出中...' : 'Submitting...';
+                btn.disabled = true;
+            } else {
+                hint.textContent = '';
+                btn.textContent = t('submitReviewButton');
+                btn.disabled = false;
+            }
+        }
+
+        function renderSubmitPreviewDetail() {
+            if (!submitPreviewSnapshot) return;
+            const detail = submitPreviewSnapshot;
+            const existingOrderNo = detail.orderNo || detail.orderId;
+
+            $('#odTitle').textContent = t('submitReviewTitle');
+            $('#odHint').textContent = '';
+            $('#odMeta').style.display = '';
+            if (submitPreviewSubmitted || existingOrderNo) {
+                setOrderNoPill(t('submitReviewOrderCode'), existingOrderNo || t('noOrderYet'), true);
+            } else {
+                setOrderNoPill(t('submitReviewOrderCode'), lang === 'zh' ? '送出後產生' : 'After Submit', false);
+            }
+            $('#odTimePill').textContent = `${t('submitReviewTime')} ${detail.time || '--'}`;
+            $('#odMeta').querySelector('div[style*="margin-top:.8rem"]').firstElementChild.textContent = t('submitReviewCurrent');
+
+            const items = Array.isArray(detail.items) ? detail.items : [];
+            const totalMoney = items.reduce((s, it) => s + calcLinePrice(it), 0);
+            $('#odTotalTop').textContent = `＄${totalMoney}`;
+            $('#checkoutNotice').textContent = I18N.checkoutNotice[lang];
+
+            $('#odList').innerHTML = items.map(it => `
+                <div class="card" style="padding:.8rem;margin:.5rem 0;">
+                    <div style="display:flex;justify-content:space-between;gap:.6rem;">
+                        <div>
+                            <div style="font-weight:1000">${escapeHtml(lang === 'en' ? (it.enName || it.name) : it.name)}</div>
+                            ${it.addOns?.length ? `<div class="muted" style="margin-top:.25rem">${I18N.addons[lang]}：${it.addOns.map(a => escapeHtml(lang === 'en' ? (a.enName || a.name) : a.name)).join('、')}</div>` : ''}
+                            ${it.extras?.length ? `<div class="muted" style="margin-top:.25rem">${I18N.cartExtras[lang]}：${it.extras.map(ex => `${escapeHtml(lang === 'en' ? (ex.enName || ex.name) : ex.name)} × ${Number(ex.qty || 0)}`).join('、')}</div>` : ''}
+                            ${it.temp ? `<div class="muted" style="margin-top:.25rem">${I18N.tempLabel[lang]}：${escapeHtml(I18N.tempOptions[it.temp]?.[lang] || it.temp)}</div>` : ''}
+                        </div>
+                        <div style="text-align:right;font-weight:1000">x ${Number(it.qty || 1)}<br>＄${calcLinePrice(it)}</div>
+                    </div>
+                </div>
+            `).join('');
+
+            setSubmitReviewState();
+        }
+
+        function startSubmitPreviewCountdown() {
+            stopSubmitPreviewCountdown();
+            submitPreviewRemain = 3;
+            setSubmitReviewState();
+            submitPreviewTimer = setInterval(() => {
+                submitPreviewRemain -= 1;
+                if (submitPreviewRemain <= 0) {
+                    submitPreviewRemain = 0;
+                    stopSubmitPreviewCountdown();
+                }
+                setSubmitReviewState();
+            }, 1000);
+        }
+
+        async function openSubmitReview() {
+            const id = getOrderId();
+            if (!id) {
+                toast(lang === 'zh' ? '請先建立訂單' : 'Please create an order first');
+                return;
+            }
+            if (!cart.length) {
+                toast(lang === 'zh' ? '購物車目前沒有商品' : 'Cart is empty');
+                return;
+            }
+
+            submitPreviewMode = true;
+            submitPreviewSubmitted = false;
+            const submittedOrder = await loadSubmittedOrderBySession(id);
+            if (submittedOrder) lastOrderDetail = submittedOrder;
+            const existingOrderNo = submittedOrder?.orderId || lastOrderDetail?.orderId || '';
+            submitPreviewSnapshot = {
+                id,
+                sessionId: submittedOrder?.sessionId || id,
+                orderNo: existingOrderNo || '',
+                orderId: existingOrderNo || '',
+                time: new Date().toLocaleTimeString(lang === 'zh' ? 'zh-TW' : 'en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+                items: normalizeCartPayload(cart)
+            };
+            renderSubmitPreviewDetail();
+            openModal('orderDetailModal');
+            startSubmitPreviewCountdown();
+        }
+
+        document.addEventListener('click', e => {
+            const closer = e.target.closest('[data-close]');
+            if (closer) closeModal(closer.getAttribute('data-close'));
+            if (e.target.classList.contains('modal') && e.target.id) closeModal(e.target.id);
+        });
+
+        function getOrderId() { return localStorage.getItem('orderId') || ''; }
+        function setOrderId(v) { localStorage.setItem('orderId', v); }
+        function getOrderType() { return localStorage.getItem('orderType') || 'dinein'; }
+        function setOrderType(v) { localStorage.setItem('orderType', v); }
+        function clearOrderType() { localStorage.removeItem('orderType'); }
+        function getOrderTableValue() { return getOrderType() === 'takeout' ? '外帶' : '內用'; }
+        function getNickname() { return localStorage.getItem('nickname') || ''; }
+        function setNickname(v) { localStorage.setItem('nickname', v); }
+
+        function nextGuestName() {
+            const MY_KEY = 'guest_my_name';
+            const saved = localStorage.getItem(MY_KEY);
+            if (saved) return saved;
+            const SEQ_KEY = 'guest_seq';
+            let n = parseInt(localStorage.getItem(SEQ_KEY) || '0', 10);
+            n += 1;
+            localStorage.setItem(SEQ_KEY, String(n));
+            const name = `訪客${n}`;
+            localStorage.setItem(MY_KEY, name);
+            return name;
+        }
+
+        function ensureNickname(forceInput = false) {
+            let v = sanitizeNickname(($('#nicknameInput')?.value || ''));
+            if (!v && !forceInput) v = sanitizeNickname(getNickname());
+            if (!v) v = nextGuestName();
+            setNickname(v);
+            if ($('#nicknameInput')) $('#nicknameInput').value = v;
+            return v;
+        }
+
+        function cartCacheKey(id) { return `partner_cart_${id}`; }
+
+        function saveCartCache(id) {
+            if (!id) return;
+            const normalized = normalizeCartPayload(cart);
+            localStorage.setItem(cartCacheKey(id), JSON.stringify({
+                cart: normalized,
+                total: calcCartTotal(normalized),
+                savedAt: Date.now()
+            }));
+        }
+
+        function loadCartCache(id) {
+            if (!id) return null;
+            try {
+                const raw = JSON.parse(localStorage.getItem(cartCacheKey(id)) || 'null');
+                if (!raw || typeof raw !== 'object') return null;
+                const cachedCart = normalizeCartPayload(raw.cart || []);
+                return { cart: cachedCart, total: calcCartTotal(cachedCart), savedAt: Number(raw.savedAt || 0) };
+            } catch {
+                return null;
+            }
+        }
+
+        function clearOrderSession() {
+            const sid = getOrderId();
+            if (sid) localStorage.removeItem(cartCacheKey(sid));
+            localStorage.removeItem('orderId');
+            clearOrderType();
+            cart = [];
+            total = 0;
+            users = [];
+            locks = {};
+            lastOrderDetail = null;
+            updateCartCount();
+            updatePresence();
+        }
+
+        function clearAllCartCaches() {
+            const keys = [];
+            for (let i = 0; i < localStorage.length; i += 1) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith('partner_cart_')) keys.push(key);
+            }
+            keys.forEach(key => localStorage.removeItem(key));
+        }
+
+        function forgetSubmittedOrderSession(sid = getOrderId()) {
+            if (sid) localStorage.removeItem(cartCacheKey(sid));
+            localStorage.removeItem('orderId');
+            clearOrderType();
+            cart = [];
+            total = 0;
+            users = [];
+            locks = {};
+            updateCartCount();
+            updatePresence();
+        }
+
+        function getSold() {
+            try {
+                const raw = JSON.parse(localStorage.getItem(trustedSoldMemoryKey()) || '[]');
+                return Array.isArray(raw) ? raw : [];
+            } catch {
+                return [];
+            }
+        }
+
+        function setSold(arr) {
+            const safe = Array.isArray(arr) ? arr : [];
+            localStorage.setItem(trustedSoldMemoryKey(), JSON.stringify(safe));
+        }
+
+        async function fetchSoldRemote() {
+            try {
+                const r = await fetch(`${BASE_API}/soldout`, { cache: 'no-store' });
+                if (!r.ok) throw new Error('soldout fail');
+                const j = await r.json();
+                const list = Array.isArray(j) ? j : (Array.isArray(j.items) ? j.items : []);
+                setSold(list);
+                return list;
+            } catch {
+                return getSold();
+            }
+        }
+
+        function isSold(item, cIdx = -1, idx = -1) {
+            const sold = getSold();
+
+            if (cIdx >= 0 && idx >= 0) {
+                return sold.some(([ci, ii]) => ci === cIdx && ii === idx);
+            }
+
+            return sold.includes(item?.name) || sold.includes(item?.key);
+        }
+
+        function soldKeyMatches(key) {
+            const sold = getSold();
+            if (sold.includes(key)) return true;
+
+            for (let cIdx = 0; cIdx < MENU.length; cIdx += 1) {
+                const category = MENU[cIdx];
+                for (let idx = 0; idx < category.items.length; idx += 1) {
+                    const item = category.items[idx];
+                    if (item.name === key || item.key === key || item.enName === key) {
+                        if (isSold(item, cIdx, idx)) return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        async function sessionExistsRemote(id) {
+            try {
+                const r = await fetch(`${BASE_API}/session/exists/${encodeURIComponent(id)}`, { cache: 'no-store' });
+                const j = await r.json();
+                return !!j.exists;
+            } catch {
+                return false;
+            }
+        }
+
+        async function sessionHasSubmittedOrder(id) {
+            try {
+                const r = await fetch(`${BASE_API}/order_by_session/${encodeURIComponent(id)}`, { cache: 'no-store' });
+                const j = await r.json();
+                return !!(j && j.exists && j.order);
+            } catch {
+                return false;
+            }
+        }
+
+        async function loadSubmittedOrderBySession(id) {
+            try {
+                const r = await fetch(`${BASE_API}/order_by_session/${encodeURIComponent(id)}`, { cache: 'no-store' });
+                const j = await r.json();
+                return (j && j.exists && j.order) ? j.order : null;
+            } catch {
+                return null;
+            }
+        }
+
+        async function createSessionRemote() {
+            try {
+                const r = await fetch(`${BASE_API}/session/new`, {
+                    method: 'POST'
+                });
+                const j = await r.json();
+                return j.sessionId || '';
+            } catch {
+                return '';
+            }
+        }
+
+        function connectSocket() {
+            if (socket) return;
+            socket = io(SOCKET_URL, { transports: ["websocket", "polling"] });
+
+            socket.on("connect", () => {
+                mySocketId = socket.id;
+                const sessionId = getOrderId();
+                const nickname = sanitizeNickname(getNickname() || nextGuestName()) || '訪客';
+                if (sessionId) {
+                    safeSocketEmit("join_session", { sessionId, nickname }, { guardKey: `join_session:${sessionId}`, gapMs: CLIENT_LIMITS.joinCooldownMs });
+                }
+            });
+
+            socket.on("session_state", (st) => {
+                const activeSessionId = getOrderId();
+                if (st?.sessionId && activeSessionId && String(st.sessionId) !== String(activeSessionId)) return;
+                if (submitBusy && submitPreviewSnapshot?.sessionId && String(submitPreviewSnapshot.sessionId) === String(activeSessionId)) return;
+                const incomingCart = Array.isArray(st.cart) ? st.cart : [];
+                cart = mergeItemsIntoCart([], incomingCart);
+                total = calcCartTotal(cart);
+                users = Array.isArray(st.users) ? st.users : [];
+                locks = st.locks || {};
+
+                updatePresence();
+                updateCartCount();
+                saveCartCache(getOrderId());
+
+                if (isVisible($('#page-cart'))) renderCart();
+            });
+
+            socket.on("lock_update", (p) => {
+                if (!p?.lineId) return;
+                locks[p.lineId] = { byName: sanitizeNickname(p.byName || '') || '訪客' };
+                if (isVisible($('#page-cart'))) renderCart();
+            });
+
+            socket.on("lock_remove", (p) => {
+                if (!p?.lineId) return;
+                delete locks[p.lineId];
+                if (isVisible($('#page-cart'))) renderCart();
+            });
+
+            socket.on("lock_denied", (p) => toast(`被 ${sanitizeNickname(p?.byName || '') || '其他人'} 鎖定中`));
+            socket.on("op_rejected", (p) => toast(`操作失敗：${sanitizeText(p?.reason || '未知原因', 60)}`));
+
+            socket.on("submit_result", (res) => {
+                submitBusy = false;
+                $('#sendOrder').disabled = false;
+
+                if (res && res.ok) {
+                    const submittedSid = getOrderId();
+                    submitPreviewSubmitted = true;
+                    if (submitPreviewSnapshot) {
+                        submitPreviewSnapshot.orderNo = res.order?.orderId || res.orderId || submitPreviewSnapshot.orderNo;
+                        submitPreviewSnapshot.orderId = submitPreviewSnapshot.orderNo;
+                        submitPreviewSnapshot.sessionId = submittedSid || submitPreviewSnapshot.sessionId || submitPreviewSnapshot.id;
+                        submitPreviewSnapshot.requestId = res.requestId || submitPreviewSnapshot.requestId || '';
+                        if (res.order?.items) {
+                            submitPreviewSnapshot.items = normalizeCartPayload(res.order.items);
+                            submitPreviewSnapshot.time = res.order.time || submitPreviewSnapshot.time;
+                        }
+                    }
+                    console.info('[order-submit][frontend-result]', {
+                        requestId: res.requestId || submitPreviewSnapshot?.requestId || '',
+                        sessionId: submittedSid,
+                        ticketId: res.ticketId,
+                        orderId: res.orderId,
+                        items: res.order?.items || submitPreviewSnapshot?.items || []
+                    });
+                    saveSubmittedOrderSnapshot();
+                    renderSubmitPreviewDetail();
+                    setSubmitReviewState();
+                    toast(t('submitSuccessToast'));
+                    forgetSubmittedOrderSession(submittedSid);
+                } else {
+                    toast(sanitizeText(res?.msg || '送出失敗', 60));
+                    setSubmitReviewState();
+                }
+            });
+
+            socket.on("order_detail_result", (res) => {
+                orderDetailBusy = false;
+                if (!res?.ok) {
+                    toast(sanitizeText(res?.msg || '訂單明細讀取失敗', 60));
+                    return;
+                }
+
+                if (!res.exists || !res.order) {
+                    if (submitPreviewMode && submitPreviewSnapshot) {
+                        renderSubmitPreviewDetail();
+                        openModal('orderDetailModal');
+                        return;
+                    }
+                    renderOrderDetail(null);
+                    openModal('orderDetailModal');
+                    return;
+                }
+
+                lastOrderDetail = res.order;
+
+                if (submitPreviewMode) {
+                    submitPreviewSnapshot = {
+                        id: res.order.id || getOrderId(),
+                        sessionId: res.order.sessionId || submitPreviewSnapshot?.sessionId || getOrderId(),
+                        orderNo: res.order.orderId || submitPreviewSnapshot?.orderNo || '',
+                        orderId: res.order.orderId || submitPreviewSnapshot?.orderNo || '',
+                        time: res.order.time || submitPreviewSnapshot?.time || '--',
+                        items: normalizeCartPayload(res.order.items || [])
+                    };
+                    if (submitPreviewSubmitted) saveSubmittedOrderSnapshot();
+                    renderSubmitPreviewDetail();
+                    openModal('orderDetailModal');
+                    return;
+                }
+
+                renderOrderDetail(res.order);
+                openModal('orderDetailModal');
+            });
+
+            socket.on("error_msg", (e) => {
+                submitBusy = false;
+                orderDetailBusy = false;
+                $('#sendOrder').disabled = false;
+                setSubmitReviewState();
+                const msg = sanitizeText(e?.msg || 'error', 80);
+                toast(msg);
+                if (msg.includes('查無此訂單代碼') || msg.includes('已過期') || msg.toLowerCase().includes('expired')) {
+                    resetSubmitPreviewState();
+                    clearOrderSession();
+                    goHome();
+                    restoreWelcomeModalFull();
+                    setTimeout(() => {
+                        openModal('welcomeModal');
+                    }, 200);
+                }
+            });
+        }
+
+        function joinSocketRoom(sessionId) {
+            connectSocket();
+            const nickname = sanitizeNickname(getNickname() || nextGuestName()) || '訪客';
+            if (socket?.connected) {
+                safeSocketEmit("join_session", { sessionId, nickname }, { guardKey: `join_room:${sessionId}`, gapMs: CLIENT_LIMITS.joinCooldownMs });
+            }
+        }
+
+        function updatePresence() {
+            const box = $('#presenceBox');
+            if (!box) return;
+            if (!getOrderId()) { box.style.display = 'none'; return; }
+            box.style.display = '';
+
+            const me = getNickname() || "訪客";
+            const sid = getOrderId();
+            const myId = mySocketId || socket?.id || null;
+            const others = (users || []).filter(u => u.sid && myId && u.sid !== myId);
+
+            const list = others.map(u => `<span class="pill">🧑 ${escapeHtml(u.nickname || '訪客')}</span>`).join('');
+
+            box.innerHTML =
+                `<span class="pill">🔑 訂單代碼 ${escapeHtml(sid)}</span>
+                 <span class="pill">⭐ 你：${escapeHtml(me)}</span>
+                 ${list}`;
+        }
+
+        function updateCartCount() {
+            const count = (cart || []).reduce((sum, it) => sum + Number(it.qty || 1), 0);
+            $('#cartCountTop').textContent = String(count);
+            $('#cartCountFab').textContent = String(count);
+        }
+
+        function calcExtraLineTotal(extras = []) {
+            return extras.reduce((sum, ex) => sum + Number(ex.price || 0) * Number(ex.qty || 0), 0);
+        }
+
+        function calcLinePrice(it) {
+            const base = Number(it?.price || 0);
+            const addSum = (it?.addOns || []).reduce((s, a) => s + Number(a?.price || 0), 0);
+            const extraSum = calcExtraLineTotal(it?.extras || []);
+            const qty = Math.max(1, Number(it?.qty || 1));
+
+            return (base + addSum) * qty + extraSum;
+        }
+
+        function calcCartTotal(arr) {
+            return (arr || []).reduce((sum, it) => sum + calcLinePrice(it), 0);
+        }
+
+        function goMenuPage() {
+            hide($('#page-home'));
+            show($('#page-menu'));
+            hide($('#page-cart'));
+            $('#openCartFab').style.display = '';
+            $('#openCartTop').style.display = '';
+            startSoldoutPolling();
+            updateCartCount();
+            fetchSoldRemote().then(arr => {
+                setSold(arr);
+                renderTabs();
+                renderMenuLong();
+            }).catch(() => {
+                renderTabs();
+                renderMenuLong();
+            });
+            updatePresence();
+        }
+
+        function goHome() {
+            show($('#page-home'));
+            hide($('#page-menu'));
+            hide($('#page-cart'));
+            $('#openCartFab').style.display = 'none';
+            $('#openCartTop').style.display = 'none';
+        }
+
+        function renderHome() {
+            document.documentElement.lang = (lang === 'zh' ? 'zh-Hant' : 'en');
+            $('#langToggle').textContent = (lang === 'zh' ? 'EN' : '中');
+            $('#txtCartTop').textContent = t('cart');
+            $('#txtCartFab').textContent = t('cart');
+            $('#goMenu').textContent = t('startOrder');
+
+            const H = I18N.home;
+            const box = $('#page-home .store-info');
+            box.innerHTML = `
+                <h2 style="font-size:28px;font-weight:1000;margin:.2rem 0 .5rem">${tz(H.openTitle)}</h2>
+                ${tz(H.openLines).map(s => `<div class="muted" style="margin:.2rem 0">${s}</div>`).join('')}
+                <h2 style="font-size:28px;font-weight:1000;margin:.8rem 0 .5rem">${tz(H.closeTitle)}</h2>
+                <div class="muted" style="margin:.2rem 0">${tz(H.closeLine)}</div>
+                <h2 style="font-size:22px;font-weight:1000;margin:1rem 0 .4rem">${tz(H.notesTitle)}</h2>
+                ${tz(H.notes).map(s => `<div class="muted" style="margin:.2rem 0">${s}</div>`).join('')}
+            `;
+        }
+
+        function renderStaticTexts() {
+            $('#txtMenuTitle').textContent = I18N.menuTitle[lang];
+            $('#backHome').textContent = I18N.backHome[lang];
+            $('#txtCartTitle').textContent = I18N.cartTitle[lang];
+            $('#backToMenu').textContent = I18N.keepOrder[lang];
+            $('#txtTotal').textContent = I18N.total[lang];
+            $('#sendOrder').textContent = I18N.sendOrder[lang];
+            $('#txtAddons').textContent = I18N.addons[lang];
+            $('#txtTemp').textContent = I18N.tempLabel[lang];
+            $('#orderDetailBtn').textContent = I18N.orderDetail[lang];
+            $('#checkoutNotice').textContent = I18N.checkoutNotice[lang];
+            $('#orderTypeTitle').textContent = I18N.orderTypeTitle[lang];
+            $('#orderTypeDesc').textContent = I18N.orderTypeDesc[lang];
+            $('#dineInBtn').textContent = I18N.dineIn[lang];
+            $('#takeOutBtn').textContent = I18N.takeOut[lang];
+            $('#startNewOrderBtn').textContent = I18N.startOrder[lang];
+            $('#returnHomeTitle').textContent = I18N.returnHomeTitle[lang];
+            $('#returnHomeDesc').textContent = I18N.returnHomeDesc[lang];
+            $('#returnHomeCancelBtn').textContent = I18N.returnHomeStay[lang];
+            $('#returnHomeConfirmBtn').textContent = I18N.returnHomeConfirm[lang];
+            setSubmitReviewState();
+        }
+
+        function flattenAllItems() {
+            return visibleMenuEntries().flatMap(({ category }) => category.items.map(it => ({ ...it, _catKey: category.key })));
+        }
+
+        function visibleMenuEntries() {
+            return MENU
+                .map((category, cIdx) => ({ category, cIdx }))
+                .filter(({ category }) => !category.hidden);
+        }
+
+        function bindSectionSpy() {
+            if (sectionSpyHandler) {
+                window.removeEventListener('scroll', sectionSpyHandler);
+            }
+
+            sectionSpyHandler = () => {
+                const sections = visibleMenuEntries()
+                    .map(({ cIdx }) => ({ cIdx, el: document.getElementById(`section-${cIdx}`) }))
+                    .filter(({ el }) => Boolean(el));
+
+                let current = 0;
+                const offset = 160;
+
+                sections.forEach(({ cIdx, el }) => {
+                    const top = el.getBoundingClientRect().top;
+                    if (top - offset <= 0) current = cIdx;
+                });
+
+                if (current !== activeTab) {
+                    activeTab = current;
+                    renderTabs();
+                    scrollActiveTabIntoView();
+                }
+            };
+
+            window.addEventListener('scroll', sectionSpyHandler, { passive: true });
+        }
+
+        function renderTabs() {
+            const el = $('#categoryTabs');
+
+            el.innerHTML = visibleMenuEntries().map(({ category, cIdx }) => `
+                <div class="tab ${cIdx === activeTab ? 'active' : ''}" data-ci="${cIdx}">
+                    ${tz(category.title)}
+                </div>
+            `).join('');
+
+            $$('#categoryTabs .tab').forEach(tab => {
+                tab.onclick = () => {
+                    const ci = Number(tab.getAttribute('data-ci'));
+                    activeTab = ci;
+                    renderTabs();
+
+                    const target = document.getElementById(`section-${ci}`);
+                    if (target) {
+                        const y = target.getBoundingClientRect().top + window.scrollY - 140;
+                        window.scrollTo({ top: y, behavior: 'smooth' });
+                    }
+                };
+            });
+        }
+
+        function renderItemCard(item, idx, isPopular = false, cIdx = -1) {
+            const sold = isSold(item, cIdx, idx);
+            return `
+                <article class="card-item text-only ${sold ? 'disabled' : ''}" data-item-index="${idx}" data-cidx="${cIdx}" data-popular="${isPopular ? '1' : '0'}">
+                    <div class="card-body text-only-body">
+                        <div class="card-title-row">
+                            <div class="card-title">${escapeHtml(displayName(item))}</div>
+                            ${sold ? `<div class="sold-text">${I18N.sold[lang]}</div>` : ''}
+                        </div>
+                        <div class="card-price">＄${Number(item.price || 0)}</div>
+                        ${displayDesc(item) ? `<div class="muted text-desc">${escapeHtml(displayDesc(item))}</div>` : ''}
+                    </div>
+                </article>
+            `;
+        }
+
+        function bindMenuCards() {
+            $$('#menuLong .card-item').forEach(card => {
+                card.onclick = () => {
+                    if (card.classList.contains('disabled')) return;
+
+                    const idx = Number(card.getAttribute('data-item-index'));
+                    const realCIdx = Number(card.getAttribute('data-cidx'));
+
+                    openItemModal(realCIdx, idx);
+                };
+            });
+        }
+
+        function renderMenuLong() {
+            const root = $('#menuLong');
+
+            root.innerHTML = visibleMenuEntries().map(({ category, cIdx }) => `
+                <section class="section" id="section-${cIdx}" data-section-index="${cIdx}">
+                    <div class="section-header">
+                        <h3 class="section-title">${tz(category.title)}</h3>
+                    </div>
+                    <div class="grid">
+                        ${category.items.map((item, idx) => renderItemCard(item, idx, false, cIdx)).join('')}
+                    </div>
+                </section>
+            `).join('');
+
+            bindMenuCards();
+        }
+
+        function scrollActiveTabIntoView() {
+            const tabs = $('#categoryTabs');
+            const active = $('#categoryTabs .tab.active');
+            if (!tabs || !active) return;
+
+            const targetLeft = active.offsetLeft - (tabs.clientWidth - active.clientWidth) / 2;
+            const maxLeft = Math.max(0, tabs.scrollWidth - tabs.clientWidth);
+            const nextLeft = Math.max(0, Math.min(targetLeft, maxLeft));
+
+            tabs.scrollTo({ left: nextLeft, behavior: 'smooth' });
+        }
+
+        function switchCategoryByDelta() {
+            return;
+        }
+
+        function getScrollState() {
+            const scrollTop = window.scrollY || document.documentElement.scrollTop;
+            const viewport = window.innerHeight;
+            const fullHeight = Math.max(
+                document.body.scrollHeight,
+                document.documentElement.scrollHeight
+            );
+
+            return {
+                nearBottom: scrollTop + viewport >= fullHeight - 6,
+                nearTop: scrollTop <= 2
+            };
+        }
+
+        window.addEventListener('wheel', (e) => {
+            if (!isVisible($('#page-menu'))) return;
+            if (isVisible($('#page-cart'))) return;
+            if ($('#itemModal').classList.contains('show')) return;
+            if ($('#welcomeModal').classList.contains('show')) return;
+            if ($('#orderDetailModal').classList.contains('show')) return;
+            if (switchCooldown) return;
+
+            const st = getScrollState();
+
+            if (e.deltaY > 0 && st.nearBottom) {
+                wheelDownAccum += Math.abs(e.deltaY);
+                wheelUpAccum = 0;
+                if (wheelDownAccum > 24) switchCategoryByDelta(1);
+            } else {
+                wheelUpAccum = 0;
+                wheelDownAccum = 0;
+            }
+        }, { passive: true });
+
+        window.addEventListener('touchstart', (e) => {
+            touchStartY = e.touches[0]?.clientY || 0;
+        }, { passive: true });
+
+        window.addEventListener('touchend', (e) => {
+            if (!isVisible($('#page-menu'))) return;
+            if (isVisible($('#page-cart'))) return;
+            if ($('#itemModal').classList.contains('show')) return;
+            if ($('#welcomeModal').classList.contains('show')) return;
+            if ($('#orderDetailModal').classList.contains('show')) return;
+            if (switchCooldown) return;
+
+            const endY = e.changedTouches[0]?.clientY || 0;
+            const diff = touchStartY - endY;
+            const st = getScrollState();
+
+            if (diff > 46 && st.nearBottom) {
+                switchCategoryByDelta(1);
+            }
+        }, { passive: true });
+
+        function deepClone(obj) {
+            return JSON.parse(JSON.stringify(obj));
+        }
+
+        function cloneUpsellSectionsByMenuKey(menuKey) {
+            return deepClone(UPSELL_TEMPLATES[menuKey] || []);
+        }
+
+        function displayUpsellText(obj) {
+            if (!obj) return '';
+            return lang === 'en' ? (obj.enName || obj.en || obj.name || obj.zh || obj.title?.en || obj.title?.zh || '') : (obj.name || obj.zh || obj.title?.zh || obj.enName || '');
+        }
+
+        function getSectionPickedCount(sec) {
+            return (sec.items || []).reduce((sum, x) => sum + (isUpsellOptionSold(x) ? 0 : Number(x.qty || 0)), 0);
+        }
+
+        function isUpsellOptionSold(opt) {
+            if (!opt) return false;
+            const soldoutKeys = Array.isArray(opt.soldoutKeys) ? opt.soldoutKeys : [];
+            const inferredKeys = [opt.name, opt.enName, opt.key].filter(Boolean);
+            const keys = [...soldoutKeys, ...inferredKeys];
+            if (!keys.length) return false;
+            return keys.some((key) => soldKeyMatches(key));
+        }
+
+        function renderUpsellSections() {
+            const sections = tempItem?.extraSections || [];
+            if (!sections.length) {
+                $('#upsellWrap').style.display = 'none';
+                $('#upsellBox').innerHTML = '';
+                return;
+            }
+
+            $('#upsellWrap').style.display = 'block';
+            $('#upsellBox').innerHTML = sections.map((sec, sIdx) => {
+                const visibleItems = (sec.items || []).filter((opt) => !isUpsellOptionSold(opt));
+                if (!visibleItems.length) return '';
+
+                const picked = visibleItems.reduce((sum, x) => sum + Number(x.qty || 0), 0);
+                const pill = sec.maxTotal
+                    ? `<span class="upsell-pill">${picked}/${sec.maxTotal}</span>`
+                    : `<span class="upsell-pill">${t('optional')}</span>`;
+                const subtitle = displayUpsellText(sec.subtitle);
+
+                const rows = visibleItems.map((opt) => {
+                    const iIdx = (sec.items || []).indexOf(opt);
+                    const priceHtml = `<div style="text-align:right;"><div class="upsell-price">+ $ ${Number(opt.price || 0)}</div>${opt.originalPrice ? `<div class="upsell-old">$ ${Number(opt.originalPrice || 0)}</div>` : ''}</div>`;
+
+                    if (sec.type === 'stepper') {
+                        return `
+                            <div class="upsell-row">
+                                <div class="upsell-left">
+                                    <div class="upsell-name">${escapeHtml(displayUpsellText(opt))}</div>
+                                    <div class="upsell-meta">
+                                        ${priceHtml}
+                                        ${opt.tempSelectable ? `<span class="muted">${escapeHtml(I18N.tempLabel[lang])}：${escapeHtml(I18N.tempOptions[opt.temp || 'cold']?.[lang] || '冰')}</span>` : ''}
+                                    </div>
+                                </div>
+                                <div class="upsell-controls">
+                                    <button type="button" class="circle-btn" data-upsell-minus="${sIdx}:${iIdx}">－</button>
+                                    <div class="upsell-qty" data-upsell-qty="${sIdx}:${iIdx}">${Number(opt.qty || 0)}</div>
+                                    <button type="button" class="circle-btn" data-upsell-plus="${sIdx}:${iIdx}">＋</button>
+                                </div>
+                            </div>
+                        `;
+                    }
+
+                    return `
+                        <div class="upsell-row text-only-upsell">
+                            <div class="upsell-left">
+                                <div class="upsell-name">${escapeHtml(displayUpsellText(opt))}</div>
+                                <div class="upsell-meta">${priceHtml}</div>
+                            </div>
+                            <button type="button" class="check-btn ${opt.qty ? 'active' : ''}" data-upsell-check="${sIdx}:${iIdx}"></button>
+                        </div>
+                    `;
+                }).join('');
+
+                return `
+                    <div class="upsell-section">
+                        <div class="upsell-head">
+                            <div class="upsell-title">${escapeHtml(displayUpsellText(sec.title))}</div>
+                            ${pill}
+                        </div>
+                        ${subtitle ? `<div class="upsell-sub">${escapeHtml(subtitle)}</div>` : ''}
+                        <div class="upsell-list">${rows}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function syncUpsellDraft() {
+            if (!tempItem) return;
+
+            const sections = tempItem.extraSections || [];
+            const extras = [];
+
+            sections.forEach((sec) => {
+                (sec.items || []).forEach((opt) => {
+                    if (isUpsellOptionSold(opt)) {
+                        opt.qty = 0;
+                        return;
+                    }
+
+                    const qty = Math.max(0, parseInt(opt.qty || 0, 10) || 0);
+                    if (qty <= 0) return;
+
+                    extras.push({
+                        key: opt.key,
+                        name: opt.name,
+                        enName: opt.enName,
+                        price: Number(opt.price || 0),
+                        qty,
+                        originalPrice: Number(opt.originalPrice || 0),
+                        sectionKey: sec.key,
+                        sectionTitle: displayUpsellText(sec.title),
+                        img: opt.img || '',
+                        tempSelectable: !!opt.tempSelectable,
+                        temp: opt.tempSelectable ? (opt.temp || 'cold') : null
+                    });
+                });
+            });
+
+            tempItem.extras = extras;
+        }
+
+        document.addEventListener('click', (e) => {
+            if (!tempItem) return;
+
+            const minusBtn = e.target.closest('[data-upsell-minus]');
+            if (minusBtn) {
+                const [sIdx, iIdx] = minusBtn.getAttribute('data-upsell-minus').split(':').map(Number);
+                const sec = tempItem.extraSections?.[sIdx];
+                const opt = sec?.items?.[iIdx];
+                if (!sec || !opt) return;
+                if (isUpsellOptionSold(opt)) {
+                    opt.qty = 0;
+                    renderUpsellSections();
+                    syncUpsellDraft();
+                    return;
+                }
+
+                opt.qty = Math.max(0, Number(opt.qty || 0) - 1);
+                renderUpsellSections();
+                syncUpsellDraft();
+                return;
+            }
+
+            const plusBtn = e.target.closest('[data-upsell-plus]');
+            if (plusBtn) {
+                const [sIdx, iIdx] = plusBtn.getAttribute('data-upsell-plus').split(':').map(Number);
+                const sec = tempItem.extraSections?.[sIdx];
+                const opt = sec?.items?.[iIdx];
+                if (!sec || !opt) return;
+                if (isUpsellOptionSold(opt)) {
+                    opt.qty = 0;
+                    renderUpsellSections();
+                    syncUpsellDraft();
+                    toast(lang === 'zh' ? '此品項已估清' : 'This item is sold out');
+                    return;
+                }
+
+                const current = getSectionPickedCount(sec);
+                if (sec.maxTotal && current >= sec.maxTotal) {
+                    toast(`此區最多可選 ${sec.maxTotal}`);
+                    return;
+                }
+
+                opt.qty = Number(opt.qty || 0) + 1;
+                renderUpsellSections();
+                syncUpsellDraft();
+                return;
+            }
+
+            const checkBtn = e.target.closest('[data-upsell-check]');
+            if (checkBtn) {
+                const [sIdx, iIdx] = checkBtn.getAttribute('data-upsell-check').split(':').map(Number);
+                const sec = tempItem.extraSections?.[sIdx];
+                const opt = sec?.items?.[iIdx];
+                if (!sec || !opt) return;
+                if (isUpsellOptionSold(opt)) {
+                    opt.qty = 0;
+                    renderUpsellSections();
+                    syncUpsellDraft();
+                    toast(lang === 'zh' ? '此品項已估清' : 'This item is sold out');
+                    return;
+                }
+
+                const willCheck = !(Number(opt.qty || 0) > 0);
+                if (willCheck && sec.maxTotal && getSectionPickedCount(sec) >= sec.maxTotal) {
+                    toast(`此區最多可選 ${sec.maxTotal}`);
+                    return;
+                }
+
+                opt.qty = willCheck ? 1 : 0;
+                renderUpsellSections();
+                syncUpsellDraft();
+            }
+        });
+
+        function cartItemMergeKey(it) {
+            const addOns = (it.addOns || [])
+                .map(a => `${a.key || a.name}:${Number(a.price || 0)}`)
+                .sort()
+                .join('|');
+            const extras = (it.extras || [])
+                .map(ex => `${ex.key || ex.name}:${Number(ex.price || 0)}:${Number(ex.qty || 0)}:${ex.temp || ''}`)
+                .sort()
+                .join('|');
+
+            return JSON.stringify({
+                key: it.key || '',
+                name: it.name || '',
+                price: Number(it.price || 0),
+                temp: it.temp || null,
+                addOns,
+                extras,
+                category: it.category || ''
+            });
+        }
+
+        function mergeItemsIntoCart(baseCart, itemsToAdd) {
+            const next = Array.isArray(baseCart) ? [...baseCart] : [];
+
+            (itemsToAdd || []).forEach((item) => {
+                const normalized = {
+                    ...item,
+                    qty: Math.max(1, Number(item.qty || 1))
+                };
+
+                const key = cartItemMergeKey(normalized);
+                const found = next.find(x => cartItemMergeKey(x) === key);
+
+                if (found) {
+                    found.qty = Math.max(1, Number(found.qty || 1)) + normalized.qty;
+
+                    if (!found.lineId && normalized.lineId) {
+                        found.lineId = normalized.lineId;
+                    }
+                } else {
+                    next.push(normalized);
+                }
+            });
+
+            return next;
+        }
+
+        function openItemModal(cIdx, iIdx) {
+            const cat = MENU[cIdx];
+            const item = cat.items[iIdx];
+
+            tempItem = {
+                lineId: crypto.randomUUID ? crypto.randomUUID() : (Date.now().toString(16) + Math.random().toString(16).slice(2)),
+                key: sanitizeText(item.key || item.name || '', 60),
+                name: sanitizeText(item.name || '', 60),
+                enName: sanitizeText(item.enName || '', 80),
+                price: safePrice(item.price),
+                qty: 1,
+                temp: null,
+                addOns: [],
+                extras: [],
+                extraSections: cloneUpsellSectionsByMenuKey(cat.key),
+                addedBy: null,
+                category: sanitizeText(cat?.title?.zh || cat?.key || '', 20)
+            };
+
+            $('#mName').textContent = displayName(item);
+            $('#mPrice').textContent = `＄${safePrice(item.price)}`;
+
+            const desc = displayDesc(item);
+            $('#mDesc').textContent = desc;
+            $('#mDesc').style.display = desc ? '' : 'none';
+            $('#mQty').textContent = '1';
+
+            if (item.addOns && item.addOns.length) {
+                $('#addonWrap').style.display = '';
+                $('#addonBox').innerHTML = item.addOns.map((a, idx) => `
+                    <label class="btn-ghost" style="display:flex;gap:.5rem;align-items:center;justify-content:flex-start;border-radius:12px;padding:.55rem .7rem;">
+                        <input type="checkbox" data-addon="${idx}" style="accent-color:var(--orange);">
+                        <span style="font-weight:1000">${lang === 'en' ? (a.enName || a.name) : a.name}</span>
+                    </label>
+                `).join('');
+                tempItem.addOns = [];
+                $$('#addonBox input[type="checkbox"]').forEach(ch => {
+                    ch.onchange = () => {
+                        const idx = Number(ch.getAttribute('data-addon'));
+                        const a = item.addOns[idx];
+                        const obj = normalizeAddOn({ key: a.key, name: a.name, enName: a.enName, price: a.price });
+                        if (!obj) return;
+                        if (ch.checked) {
+                            tempItem.addOns.push(obj);
+                            tempItem.addOns = tempItem.addOns.slice(0, CLIENT_LIMITS.maxAddonsPerItem);
+                        } else {
+                            tempItem.addOns = tempItem.addOns.filter(x => x.key !== obj.key);
+                        }
+                    };
+                });
+            } else {
+                $('#addonWrap').style.display = 'none';
+                $('#addonBox').innerHTML = '';
+                tempItem.addOns = [];
+            }
+
+            const tempOptions = item.tempOptions || [];
+            if (tempOptions.length > 0) {
+                $('#tempWrap').style.display = '';
+                $('#tempBox').innerHTML = tempOptions.map(k => `
+                    <label class="btn-ghost" style="display:flex;gap:.5rem;align-items:center;border-radius:999px;">
+                        <input type="radio" name="temp" value="${k}" style="accent-color:var(--orange);">
+                        <span style="font-weight:1000">${I18N.tempOptions[k][lang]}</span>
+                    </label>
+                `).join('');
+                tempItem.temp = tempOptions[0] === 'hot' ? 'hot' : 'cold';
+                const first = $(`#tempBox input[value="${tempItem.temp}"]`);
+                if (first) first.checked = true;
+                $$('input[name="temp"]').forEach(r => {
+                    r.onchange = () => { if (r.checked) tempItem.temp = (r.value === 'hot' ? 'hot' : 'cold'); };
+                });
+            } else {
+                $('#tempWrap').style.display = 'none';
+                $('#tempBox').innerHTML = '';
+                tempItem.temp = null;
+            }
+
+            renderUpsellSections();
+            syncUpsellDraft();
+
+            $('#qtyMinus').onclick = () => {
+                tempItem.qty = Math.max(1, tempItem.qty - 1);
+                $('#mQty').textContent = String(tempItem.qty);
+            };
+            $('#qtyPlus').onclick = () => {
+                tempItem.qty = Math.min(CLIENT_LIMITS.maxQtyPerLine, tempItem.qty + 1);
+                $('#mQty').textContent = String(tempItem.qty);
+            };
+
+            $('#addToCart').onclick = () => {
+                if (addCartBusy) return;
+                if (!allowAction('add_to_cart', CLIENT_LIMITS.addCartCooldownMs)) return;
+                if (!getOrderId()) {
+                    toast(lang === 'zh' ? '請先建立訂單' : 'Please create an order first');
+                    return;
+                }
+                addCartBusy = true;
+                $('#addToCart').disabled = true;
+                try {
+                    syncUpsellDraft();
+                    const sessionId = getOrderId();
+                    const me = sanitizeNickname(getNickname() || '訪客') || '訪客';
+                    const inlineUpgradeAddOns = (tempItem.extras || [])
+                        .filter(ex => ex.sectionKey === 'upgrade_fries')
+                        .flatMap((ex) => Array.from({ length: clampInt(ex.qty, 1, CLIENT_LIMITS.maxQtyPerLine, 1) }, () => ({
+                            key: ex.key,
+                            name: ex.name,
+                            enName: ex.enName,
+                            price: ex.price
+                        })));
+
+                    const detachedExtras = (tempItem.extras || []).filter(ex => ex.sectionKey !== 'upgrade_fries');
+
+                    const mainItem = normalizeCartItem({
+                        ...tempItem,
+                        addOns: [...(tempItem.addOns || []), ...inlineUpgradeAddOns],
+                        extras: [],
+                        addedBy: me,
+                        lineId: tempItem.lineId || `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+                    });
+                    if (!mainItem) {
+                        toast(lang === 'zh' ? '商品資料異常，請重試' : 'Invalid item data');
+                        return;
+                    }
+
+                    function inferExtraCategory(ex) {
+                        const name = String(ex.name || '').trim();
+                        const drinkNames = ['綠茶', '紅茶', '鮮奶紅茶', '焦糖鮮奶茶', '巧克力可可牛奶', '可口可樂', '雪碧'];
+                        const singleNames = ['脆薯', '雞塊', '美式炸雞(兩塊)', '洋蔥圈', '辣肉醬脆薯🌶️', '溫雞肉沙拉/巴薩米克醋'];
+                        if (drinkNames.includes(name)) return '飲品';
+                        if (singleNames.includes(name)) return '單點';
+                        return '單點';
+                    }
+
+                    const extraItems = detachedExtras.flatMap((ex) => {
+                        const normalized = normalizeCartItem({
+                            key: ex.key,
+                            name: ex.name,
+                            enName: ex.enName,
+                            price: ex.price,
+                            qty: clampInt(ex.qty, 1, CLIENT_LIMITS.maxQtyPerLine, 1),
+                            addOns: [],
+                            extras: [],
+                            temp: ex.tempSelectable ? (ex.temp || 'cold') : null,
+                            addedBy: me,
+                            category: ex.category || inferExtraCategory(ex),
+                            lineId: `extra_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+                        });
+                        return normalized ? [normalized] : [];
+                    }).slice(0, CLIENT_LIMITS.maxExtrasPerItem);
+
+                    const itemsToAdd = normalizeCartPayload([mainItem, ...extraItems]);
+                    if (!itemsToAdd.length) return;
+                    cart = normalizeCartPayload(mergeItemsIntoCart(cart, itemsToAdd));
+                    total = calcCartTotal(cart);
+                    updateCartCount();
+                    saveCartCache(sessionId);
+                    if (isVisible($('#page-cart'))) renderCart();
+                    itemsToAdd.forEach((safeItem, idx) => {
+                        safeSocketEmit('cart_add', { sessionId, item: safeItem }, { guardKey: `cart_add:${sessionId}:${safeItem.lineId}:${idx}`, gapMs: CLIENT_LIMITS.addCartCooldownMs });
+                    });
+                    closeModal('itemModal');
+                    toast(lang === 'zh' ? '已加入購物車' : 'Added to cart');
+                } finally {
+                    setTimeout(() => {
+                        addCartBusy = false;
+                        $('#addToCart').disabled = false;
+                    }, CLIENT_LIMITS.addCartCooldownMs);
+                }
+            };
+            openModal('itemModal');
+        }
+
+        function renderCart() {
+            const sessionId = getOrderId();
+            cart = normalizeCartPayload(cart);
+            const rows = cart.map((it) => {
+                const lineId = it.lineId;
+                const addLine = (it.addOns && it.addOns.length) ? `<div class="opt">${I18N.addons[lang]}：${it.addOns.map(a => escapeHtml(lang === 'en' ? (a.enName || a.name) : a.name)).join('、')}</div>` : '';
+                const extraLine = (it.extras && it.extras.length) ? `<div class="opt">${I18N.cartExtras[lang]}：${it.extras.map(ex => `${escapeHtml(lang === 'en' ? (ex.enName || ex.name) : ex.name)} × ${Number(ex.qty || 0)}`).join('、')}</div>` : '';
+                const tempLine = it.temp ? `<div class="opt">${I18N.tempLabel[lang]}：${escapeHtml(I18N.tempOptions[it.temp]?.[lang] || it.temp)}</div>` : '';
+                const lineMoney = calcLinePrice(it);
+                return `
+                    <div class="cart-card">
+                        <div class="cart-row">
+                            <div>
+                                <div class="cart-name">${escapeHtml(lang === 'en' ? (it.enName || it.name) : it.name)}</div>
+                                ${addLine}
+                                ${extraLine}
+                                ${tempLine}
+                            </div>
+                            <input class="qty" type="number" min="1" max="${CLIENT_LIMITS.maxQtyPerLine}" value="${Number(it.qty || 1)}" data-lineid="${escapeHtml(lineId || '')}">
+                            <div class="price">＄${lineMoney}</div>
+                        </div>
+                        <div style="margin-top:.65rem;display:flex;justify-content:flex-end;">
+                            <button class="btn-remove" data-remove-lineid="${escapeHtml(lineId || '')}">${I18N.delete[lang]}</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            $('#cartList').innerHTML = rows || `<div class="muted">${lang === 'zh' ? '購物車目前沒有商品' : 'Cart is empty'}</div>`;
+            $('#cartTotal').textContent = `＄${calcCartTotal(cart)}`;
+
+            $$('#cartList .qty').forEach(inp => {
+                inp.onchange = () => {
+                    const lineId = inp.getAttribute('data-lineid');
+                    const val = clampInt(inp.value, 1, CLIENT_LIMITS.maxQtyPerLine, 1);
+                    inp.value = String(val);
+                    const target = cart.find(x => String(x.lineId) === String(lineId));
+                    if (!target) return;
+                    if (!allowAction(`cart_qty:${lineId}`, CLIENT_LIMITS.qtyCooldownMs)) return;
+                    target.qty = val;
+                    cart = normalizeCartPayload(cart);
+                    total = calcCartTotal(cart);
+                    saveCartCache(sessionId);
+                    renderCart();
+                    safeSocketEmit("cart_set_qty", { sessionId, lineId, qty: val }, { guardKey: `cart_set_qty:${sessionId}:${lineId}`, gapMs: CLIENT_LIMITS.qtyCooldownMs });
+                };
+            });
+
+            $$('#cartList .btn-remove').forEach(btn => {
+                btn.onclick = () => {
+                    const lineId = btn.getAttribute('data-remove-lineid');
+                    if (!allowAction(`cart_remove:${lineId}`, CLIENT_LIMITS.removeCooldownMs)) return;
+                    cart = normalizeCartPayload(cart.filter(x => String(x.lineId) !== String(lineId)));
+                    total = calcCartTotal(cart);
+                    saveCartCache(sessionId);
+                    renderCart();
+                    updateCartCount();
+                    safeSocketEmit("cart_remove", { sessionId, lineId }, { guardKey: `cart_remove_emit:${sessionId}:${lineId}`, gapMs: CLIENT_LIMITS.removeCooldownMs });
+                };
+            });
+            updateCartCount();
+        }
+
+        function renderOrderDetail(detail) {
+            if (!detail) {
+                $('#odTitle').textContent = I18N.orderDetail[lang];
+                $('#odHint').textContent = '目前沒有資料';
+                $('#odMeta').style.display = 'none';
+                $('#odList').innerHTML = '';
+                return;
+            }
+
+            lastOrderDetail = detail;
+            $('#odTitle').textContent = I18N.orderDetail[lang];
+            $('#odHint').textContent = '';
+            $('#odMeta').style.display = '';
+            setOrderNoPill(lang === 'zh' ? '🧾 訂單號' : '🧾 Order No.', detail.orderId || t('noOrderYet'));
+            $('#odTimePill').textContent = `🕒 ${detail.time || detail.createdAt || '--'}`;
+            $('#odMeta').querySelector('div[style*="margin-top:.8rem"]').firstElementChild.textContent = lang === 'zh' ? '已送出內容' : 'Submitted Items';
+
+            const items = Array.isArray(detail.items) ? detail.items : [];
+            const totalMoney = items.reduce((s, it) => s + calcLinePrice(it), 0);
+            $('#odTotalTop').textContent = `＄${totalMoney}`;
+
+            $('#odList').innerHTML = items.map(it => `
+                <div class="card" style="padding:.8rem;margin:.5rem 0;">
+                    <div style="display:flex;justify-content:space-between;gap:.6rem;">
+                        <div>
+                            <div style="font-weight:1000">${escapeHtml(lang === 'en' ? (it.enName || it.name) : it.name)}</div>
+                            ${it.addOns?.length ? `<div class="muted" style="margin-top:.25rem">${I18N.addons[lang]}：${it.addOns.map(a => escapeHtml(lang === 'en' ? (a.enName || a.name) : a.name)).join('、')}</div>` : ''}
+                            ${it.extras?.length ? `<div class="muted" style="margin-top:.25rem">${I18N.cartExtras[lang]}：${it.extras.map(ex => `${escapeHtml(lang === 'en' ? (ex.enName || ex.name) : ex.name)} × ${Number(ex.qty || 0)}`).join('、')}</div>` : ''}
+                            ${it.temp ? `<div class="muted" style="margin-top:.25rem">${I18N.tempLabel[lang]}：${escapeHtml(I18N.tempOptions[it.temp]?.[lang] || it.temp)}</div>` : ''}
+                        </div>
+                        <div style="text-align:right;font-weight:1000">x ${Number(it.qty || 1)}<br>＄${calcLinePrice(it)}</div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function requestOrderDetail() {
+            const id = getOrderId();
+            if (!id) {
+                toast(lang === 'zh' ? '請先建立訂單' : 'Please create an order first');
+                return;
+            }
+            if (orderDetailBusy) return;
+            if (!allowAction(`order_detail:${id}`, CLIENT_LIMITS.orderDetailCooldownMs)) return;
+            orderDetailBusy = true;
+            connectSocket();
+            safeSocketEmit("order_detail", { sessionId: id }, { guardKey: `order_detail_emit:${id}`, gapMs: CLIENT_LIMITS.orderDetailCooldownMs });
+        }
+
+        function restoreWelcomeModalFull() {
+            $('#secNewOrder').style.display = '';
+            $('#welcomeLaterBtn').style.display = '';
+            $('#welcomeTitle').textContent = '歡迎用餐';
+            selectedOrderType = null;
+            document.querySelectorAll('.order-type-btn').forEach(btn => {
+                btn.classList.remove('active');
+                btn.setAttribute('aria-pressed', 'false');
+            });
+            $('#startNewOrderBtn').disabled = true;
+            renderStaticTexts();
+        }
+
+        function selectOrderType(type) {
+            selectedOrderType = type;
+            document.querySelectorAll('.order-type-btn').forEach(btn => {
+                const active = btn.dataset.orderType === type;
+                btn.classList.toggle('active', active);
+                btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+            });
+            $('#startNewOrderBtn').disabled = false;
+        }
+
+        async function startNewOrderAndGoMenu() {
+            if (joinBusy) return;
+            if (!selectedOrderType) {
+                toast(I18N.chooseOrderType[lang]);
+                return;
+            }
+            joinBusy = true;
+            $('#startNewOrderBtn').disabled = true;
+            try {
+                clearAllCartCaches();
+                localStorage.removeItem('orderId');
+                clearOrderType();
+                const nickname = ensureNickname();
+                const newId = await createSessionRemote();
+                if (!newId) {
+                    toast('建立訂單失敗，請稍後再試');
+                    return;
+                }
+                setOrderId(newId);
+                setOrderType(selectedOrderType);
+                cart = [];
+                total = 0;
+                saveCartCache(newId);
+                updateCartCount();
+                joinSocketRoom(newId);
+                if (socket?.connected) {
+                    safeSocketEmit("set_nickname", { sessionId: newId, nickname }, { guardKey: `set_nickname:${newId}`, gapMs: CLIENT_LIMITS.nicknameCooldownMs });
+                }
+                closeModal('welcomeModal');
+                goMenuPage();
+                toast(`已建立訂單：${newId}`);
+            } finally {
+                joinBusy = false;
+                $('#startNewOrderBtn').disabled = false;
+            }
+        }
+
+        function startSoldoutPolling() {
+            if (soldoutTimer) return;
+            soldoutTimer = setInterval(async () => {
+                try {
+                    const before = JSON.stringify(getSold());
+                    const remote = await fetchSoldRemote();
+                    const after = JSON.stringify(remote);
+
+                    if (before !== after) {
+                        if (isVisible($('#page-menu'))) {
+                            renderMenuLong();
+                        }
+                        if (tempItem && $('#itemModal')?.classList.contains('show')) {
+                            renderUpsellSections();
+                            syncUpsellDraft();
+                        }
+                    }
+                } catch (e) {
+                    console.error('soldout polling error:', e);
+                }
+            }, 3000);
+        }
+
+        function stopSoldoutPolling() {
+            if (soldoutTimer) {
+                clearInterval(soldoutTimer);
+                soldoutTimer = null;
+            }
+        }
+
+        $('#goMenu').onclick = () => {
+            restoreWelcomeModalFull();
+            openModal('welcomeModal');
+        };
+
+        document.querySelectorAll('.order-type-btn').forEach(btn => {
+            btn.onclick = () => selectOrderType(btn.dataset.orderType);
+        });
+
+        $('#startNewOrderBtn').onclick = startNewOrderAndGoMenu;
+
+        $('#openCartTop').onclick = () => {
+            if (isVisible($('#page-home'))) return;
+            renderCart();
+            hide($('#page-menu'));
+            show($('#page-cart'));
+            $('#openCartFab').style.display = 'none';
+        };
+
+        $('#openCartFab').onclick = () => {
+            if (isVisible($('#page-home'))) return;
+            renderCart();
+            hide($('#page-menu'));
+            show($('#page-cart'));
+            $('#openCartFab').style.display = 'none';
+        };
+
+        $('#backToMenu').onclick = () => {
+            hide($('#page-cart'));
+            show($('#page-menu'));
+            $('#openCartFab').style.display = '';
+            updateCartCount();
+        };
+
+        $('#backHome').onclick = goHome;
+
+        $('#sendOrder').onclick = async () => {
+            await openSubmitReview();
+        };
+
+        $('#returnHomeConfirmBtn').onclick = finishSubmittedAndGoHome;
+
+        $('#orderDetailBtn').onclick = () => requestOrderDetail();
+
+        $('#langToggle').onclick = () => {
+            lang = (lang === 'zh' ? 'en' : 'zh');
+            localStorage.setItem('lang', lang);
+            renderHome();
+            renderStaticTexts();
+            renderTabs();
+            renderMenuLong();
+            bindSectionSpy();
+            if (isVisible($('#page-cart'))) renderCart();
+            if (submitPreviewMode && submitPreviewSnapshot) {
+                renderSubmitPreviewDetail();
+            } else if ($('#orderDetailModal').classList.contains('show')) {
+                renderOrderDetail(lastOrderDetail);
+            }
+        };
+
+        async function initPage() {
+            ensureSubmitReviewUi();
+            $('#openCartFab').style.display = 'none';
+            $('#openCartTop').style.display = 'none';
+            startSoldoutPolling();
+
+            renderHome();
+            renderStaticTexts();
+            renderTabs();
+            renderMenuLong();
+            bindSectionSpy();
+
+            const saved = getOrderId();
+            if (saved) {
+                if (!getNickname()) setNickname(nextGuestName());
+                const ok = await sessionExistsRemote(saved);
+                if (!ok) {
+                    clearOrderSession();
+                    goHome();
+                } else if (await sessionHasSubmittedOrder(saved)) {
+                    clearOrderSession();
+                    goHome();
+                } else {
+                    const cached = loadCartCache(saved);
+                    if (cached) {
+                        cart = cached.cart || [];
+                        total = Number(cached.total || 0);
+                        updateCartCount();
+                    }
+                    joinSocketRoom(saved);
+                    goMenuPage();
+                }
+            } else {
+                goHome();
+            }
+
+            if (!getOrderId()) {
+                restoreSubmittedOrderModal();
+            }
+
+            fetchSoldRemote().then(arr => {
+                setSold(arr);
+                renderMenuLong();
+            }).catch(() => { });
+        }
+
+        initPage();
+    </script>
+</body>
+</html>
