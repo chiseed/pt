@@ -172,6 +172,15 @@ class PgCursor:
             self.lastrowid = int(row[0]) if row else None
         return self
 
+    def executemany(self, sql, seq_of_params):
+        text = _pg_sql(sql)
+        self._cursor.executemany(text, seq_of_params or [])
+        return self
+
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
+
     def fetchone(self):
         return self._cursor.fetchone()
 
