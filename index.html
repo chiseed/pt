@@ -2848,8 +2848,12 @@
                     updateCartCount();
                     saveCartCache(sessionId);
                     if (isVisible($('#page-cart'))) renderCart();
-                    itemsToAdd.forEach((safeItem, idx) => {
-                        safeSocketEmit('cart_add', { sessionId, item: safeItem }, { guardKey: `cart_add:${sessionId}:${safeItem.lineId}:${idx}`, gapMs: CLIENT_LIMITS.addCartCooldownMs });
+                    safeSocketEmit('cart_add_many', {
+                        sessionId,
+                        items: itemsToAdd
+                    }, {
+                        guardKey: `cart_add_many:${sessionId}:${mainItem.lineId}`,
+                        gapMs: CLIENT_LIMITS.addCartCooldownMs
                     });
                     closeModal('itemModal');
                     toast(lang === 'zh' ? '已加入購物車' : 'Added to cart');
