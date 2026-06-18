@@ -1734,6 +1734,27 @@ def on_cart_add(data):
     broadcast_state(sid)
 
 
+@socketio.on("cart_add_many")
+def on_cart_add_many(data):
+    sid = str((data.get("sessionId") or "")).strip()
+    if not sid:
+        return
+
+    items = data.get("items") or []
+    if not isinstance(items, list):
+        return
+
+    safe_items = [item for item in items[:20] if isinstance(item, dict) and item.get("name")]
+    if not safe_items:
+        return
+
+    ensure_session(sid)
+    cart = get_session_cart(sid)
+    cart.extend(safe_items)
+    save_session_cart(sid, cart)
+    broadcast_state(sid)
+
+
 @socketio.on("cart_set_qty")
 def on_cart_set_qty(data):
     sid = str((data.get("sessionId") or "")).strip()
