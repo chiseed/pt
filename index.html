@@ -2534,6 +2534,26 @@
             }).join('');
         }
 
+        function updateItemModalPrice() {
+            if (!tempItem) return;
+
+            const qty = Math.max(1, Number(tempItem.qty || 1));
+            const base = Number(tempItem.price || 0);
+            const regularAddOns = (tempItem.addOns || []).reduce((sum, addOn) => sum + Number(addOn.price || 0), 0);
+            const upgradeTotal = (tempItem.extras || [])
+                .filter(ex => ex.sectionKey === 'upgrade_fries')
+                .reduce((sum, ex) => sum + Number(ex.price || 0) * Number(ex.qty || 0), 0);
+            const detachedExtrasTotal = (tempItem.extras || [])
+                .filter(ex => ex.sectionKey !== 'upgrade_fries')
+                .reduce((sum, ex) => sum + Number(ex.price || 0) * Number(ex.qty || 0), 0);
+            const totalPrice = (base + regularAddOns + upgradeTotal) * qty + detachedExtrasTotal;
+
+            $('#mPrice').textContent = `＄${totalPrice}`;
+            $('#addToCart').textContent = lang === 'zh'
+                ? `加入購物車 · ＄${totalPrice}`
+                : `Add to Cart · $${totalPrice}`;
+        }
+
         function syncUpsellDraft() {
             if (!tempItem) return;
 
@@ -2567,6 +2587,7 @@
             });
 
             tempItem.extras = extras;
+            updateItemModalPrice();
         }
 
         document.addEventListener('click', (e) => {
@@ -2738,6 +2759,7 @@
                         } else {
                             tempItem.addOns = tempItem.addOns.filter(x => x.key !== obj.key);
                         }
+                        updateItemModalPrice();
                     };
                 });
             } else {
@@ -2773,10 +2795,12 @@
             $('#qtyMinus').onclick = () => {
                 tempItem.qty = Math.max(1, tempItem.qty - 1);
                 $('#mQty').textContent = String(tempItem.qty);
+                updateItemModalPrice();
             };
             $('#qtyPlus').onclick = () => {
                 tempItem.qty = Math.min(CLIENT_LIMITS.maxQtyPerLine, tempItem.qty + 1);
                 $('#mQty').textContent = String(tempItem.qty);
+                updateItemModalPrice();
             };
 
             $('#addToCart').onclick = () => {
