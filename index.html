@@ -1197,8 +1197,8 @@
                 openTitle: { zh: 'OPEN', en: 'OPEN' },
                 closeTitle: { zh: 'CLOSE', en: 'CLOSE' },
                 openLines: {
-                    zh: ['18:00—01:00。', '最後接客點餐時間 00:30 或售完為止。'],
-                    en: ['6:00PM—01:00PM.', 'Last order at 00:30PM or while supplies last.']
+                    zh: ['18:00—01:00。', '最後接客點餐時間 00:00 或售完為止。'],
+                    en: ['6:00 PM—1:00 AM.', 'Last order at 12:00 AM or while supplies last.']
                 },
                 closeLine: { zh: '無固定店休，請關注 PARTNER 粉絲專頁及 Instagram。', en: 'Check Facebook and Instagram for store updates.' },
                 notesTitle: { zh: '須知', en: 'Notes' },
@@ -1772,7 +1772,7 @@
 
             const items = Array.isArray(detail.items) ? detail.items : [];
             const totalMoney = items.reduce((s, it) => s + calcLinePrice(it), 0);
-            $('#odTotalTop').textContent = `＄${totalMoney}`;
+            $('#odTotalTop').textContent = formatMoney(totalMoney);
             $('#checkoutNotice').textContent = I18N.checkoutNotice[lang];
 
             $('#odList').innerHTML = items.map(it => `
@@ -2211,11 +2211,16 @@
             return (base + addSum) * qty + extraSum;
         }
 
+        function formatMoney(amount) {
+            const symbol = lang === 'en' ? '$' : '＄';
+            return `${symbol}${Number(amount || 0)}`;
+        }
+
         function formatMoneyParts(parts) {
             const safeParts = parts
                 .map(v => Number(v || 0))
                 .filter(v => v > 0);
-            return safeParts.length ? safeParts.map(v => `＄${v}`).join(' + ') : '＄0';
+            return safeParts.length ? safeParts.map(v => formatMoney(v)).join(' + ') : formatMoney(0);
         }
 
         function formatLinePriceBreakdown(it) {
@@ -2768,7 +2773,7 @@
             };
 
             $('#mName').textContent = displayName(item);
-            $('#mPrice').textContent = `＄${safePrice(item.price)}`;
+            $('#mPrice').textContent = formatMoney(safePrice(item.price));
 
             const desc = displayDesc(item);
             $('#mDesc').textContent = desc;
@@ -2947,7 +2952,7 @@
                                 ${tempLine}
                             </div>
                             <input class="qty" type="number" min="1" max="${CLIENT_LIMITS.maxQtyPerLine}" value="${Number(it.qty || 1)}" data-lineid="${escapeHtml(lineId || '')}">
-                            <div class="price">＄${lineMoney}</div>
+                            <div class="price">${lineMoney}</div>
                         </div>
                         <div style="margin-top:.65rem;display:flex;justify-content:flex-end;">
                             <button class="btn-remove" data-remove-lineid="${escapeHtml(lineId || '')}">${I18N.delete[lang]}</button>
@@ -3010,7 +3015,7 @@
 
             const items = Array.isArray(detail.items) ? detail.items : [];
             const totalMoney = items.reduce((s, it) => s + calcLinePrice(it), 0);
-            $('#odTotalTop').textContent = `＄${totalMoney}`;
+            $('#odTotalTop').textContent = formatMoney(totalMoney);
 
             $('#odList').innerHTML = items.map(it => `
                 <div class="card" style="padding:.8rem;margin:.5rem 0;">
