@@ -2878,19 +2878,20 @@
                     syncUpsellDraft();
                     const sessionId = getOrderId();
                     const me = sanitizeNickname(getNickname() || '訪客') || '訪客';
-                    const extrasForLineItems = (tempItem.extras || []).map(ex => {
-                        if (ex.sectionKey !== 'upgrade_fries') return ex;
-                        return {
-                            ...ex,
+                    const inlineUpgradeAddOns = (tempItem.extras || [])
+                        .filter(ex => ex.sectionKey === 'upgrade_fries')
+                        .flatMap((ex) => Array.from({ length: clampInt(ex.qty, 1, CLIENT_LIMITS.maxQtyPerLine, 1) }, () => ({
+                            key: ex.key,
                             name: '升級辣肉醬薯條',
                             enName: 'Upgrade to spicy meat sauce fries',
-                            category: '加購'
-                        };
-                    });
+                            price: ex.price
+                        })));
+
+                    const detachedExtras = (tempItem.extras || []).filter(ex => ex.sectionKey !== 'upgrade_fries');
 
                     const mainItem = normalizeCartItem({
                         ...tempItem,
-                        addOns: tempItem.addOns || [],
+                        addOns: [...(tempItem.addOns || []), ...inlineUpgradeAddOns],
                         extras: [],
                         addedBy: me,
                         lineId: tempItem.lineId || `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
@@ -2909,7 +2910,7 @@
                         return '單點';
                     }
 
-                    const extraItems = extrasForLineItems.flatMap((ex) => {
+                    const extraItems = detachedExtras.flatMap((ex) => {
                         const normalized = normalizeCartItem({
                             key: ex.key,
                             name: ex.name,
