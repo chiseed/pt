@@ -1784,7 +1784,7 @@
                             ${it.extras?.length ? `<div class="muted" style="margin-top:.25rem">${I18N.cartExtras[lang]}：${it.extras.map(ex => `${escapeHtml(lang === 'en' ? (ex.enName || ex.name) : ex.name)} × ${Number(ex.qty || 0)}`).join('、')}</div>` : ''}
                             ${it.temp ? `<div class="muted" style="margin-top:.25rem">${I18N.tempLabel[lang]}：${escapeHtml(I18N.tempOptions[it.temp]?.[lang] || it.temp)}</div>` : ''}
                         </div>
-                        <div style="text-align:right;font-weight:1000">x ${Number(it.qty || 1)}<br>＄${calcLinePrice(it)}</div>
+                        <div style="text-align:right;font-weight:1000">x ${Number(it.qty || 1)}<br>${formatLinePriceBreakdown(it)}</div>
                     </div>
                 </div>
             `).join('');
@@ -2211,6 +2211,21 @@
             return (base + addSum) * qty + extraSum;
         }
 
+        function formatMoneyParts(parts) {
+            const safeParts = parts
+                .map(v => Number(v || 0))
+                .filter(v => v > 0);
+            return safeParts.length ? safeParts.map(v => `＄${v}`).join(' + ') : '＄0';
+        }
+
+        function formatLinePriceBreakdown(it) {
+            const qty = Math.max(1, Number(it?.qty || 1));
+            const basePart = Number(it?.price || 0) * qty;
+            const addOnPart = (it?.addOns || []).reduce((s, a) => s + Number(a?.price || 0), 0) * qty;
+            const extraPart = calcExtraLineTotal(it?.extras || []);
+            return formatMoneyParts([basePart, addOnPart, extraPart]);
+        }
+
         function calcCartTotal(arr) {
             return (arr || []).reduce((sum, it) => sum + calcLinePrice(it), 0);
         }
@@ -2568,11 +2583,12 @@
                 .filter(ex => ex.sectionKey !== 'upgrade_fries')
                 .reduce((sum, ex) => sum + Number(ex.price || 0) * Number(ex.qty || 0), 0);
             const totalPrice = (base + regularAddOns + upgradeTotal) * qty + detachedExtrasTotal;
+            const priceText = formatMoneyParts([base * qty, (regularAddOns + upgradeTotal) * qty, detachedExtrasTotal]);
 
-            $('#mPrice').textContent = `＄${totalPrice}`;
+            $('#mPrice').textContent = priceText;
             $('#addToCart').textContent = lang === 'zh'
-                ? `加入購物車 · ＄${totalPrice}`
-                : `Add to Cart · $${totalPrice}`;
+                ? `加入購物車 · ${priceText}`
+                : `Add to Cart · ${priceText}`;
         }
 
         function syncUpsellDraft() {
@@ -2920,7 +2936,7 @@
                 const addLine = (it.addOns && it.addOns.length) ? `<div class="opt">${I18N.addons[lang]}：${it.addOns.map(a => escapeHtml(lang === 'en' ? (a.enName || a.name) : a.name)).join('、')}</div>` : '';
                 const extraLine = (it.extras && it.extras.length) ? `<div class="opt">${I18N.cartExtras[lang]}：${it.extras.map(ex => `${escapeHtml(lang === 'en' ? (ex.enName || ex.name) : ex.name)} × ${Number(ex.qty || 0)}`).join('、')}</div>` : '';
                 const tempLine = it.temp ? `<div class="opt">${I18N.tempLabel[lang]}：${escapeHtml(I18N.tempOptions[it.temp]?.[lang] || it.temp)}</div>` : '';
-                const lineMoney = calcLinePrice(it);
+                const lineMoney = formatLinePriceBreakdown(it);
                 return `
                     <div class="cart-card">
                         <div class="cart-row">
@@ -3005,7 +3021,7 @@
                             ${it.extras?.length ? `<div class="muted" style="margin-top:.25rem">${I18N.cartExtras[lang]}：${it.extras.map(ex => `${escapeHtml(lang === 'en' ? (ex.enName || ex.name) : ex.name)} × ${Number(ex.qty || 0)}`).join('、')}</div>` : ''}
                             ${it.temp ? `<div class="muted" style="margin-top:.25rem">${I18N.tempLabel[lang]}：${escapeHtml(I18N.tempOptions[it.temp]?.[lang] || it.temp)}</div>` : ''}
                         </div>
-                        <div style="text-align:right;font-weight:1000">x ${Number(it.qty || 1)}<br>＄${calcLinePrice(it)}</div>
+                        <div style="text-align:right;font-weight:1000">x ${Number(it.qty || 1)}<br>${formatLinePriceBreakdown(it)}</div>
                     </div>
                 </div>
             `).join('');
