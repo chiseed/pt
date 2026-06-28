@@ -1404,7 +1404,7 @@
         let addCartBusy = false;
         let orderDetailBusy = false;
         let selectedOrderType = null;
-        let takeoutNoticeAcknowledged = false;
+        let confirmingTakeoutNotice = false;
 
         function nowTs() {
             return Date.now();
@@ -1641,8 +1641,14 @@
             modal.classList.remove('show');
 
             if (id === 'takeoutNoticeModal') {
-                takeoutNoticeAcknowledged = true;
-                selectOrderType('takeout');
+                confirmingTakeoutNotice = false;
+                selectedOrderType = 'takeout';
+                document.querySelectorAll('.order-type-btn').forEach(btn => {
+                    const active = btn.dataset.orderType === 'takeout';
+                    btn.classList.toggle('active', active);
+                    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+                });
+                $('#startNewOrderBtn').disabled = false;
             }
 
             if (id === 'orderDetailModal') {
@@ -3072,13 +3078,14 @@
         }
 
         function selectOrderType(type) {
-            if (type === 'takeout' && !takeoutNoticeAcknowledged) {
+            if (type === 'takeout' && !confirmingTakeoutNotice) {
                 selectedOrderType = null;
                 document.querySelectorAll('.order-type-btn').forEach(btn => {
                     btn.classList.remove('active');
                     btn.setAttribute('aria-pressed', 'false');
                 });
                 $('#startNewOrderBtn').disabled = true;
+                confirmingTakeoutNotice = true;
                 openModal('takeoutNoticeModal');
                 return;
             }
@@ -3094,10 +3101,6 @@
 
         async function startNewOrderAndGoMenu() {
             if (joinBusy) return;
-            if (selectedOrderType === 'takeout' && !takeoutNoticeAcknowledged) {
-                openModal('takeoutNoticeModal');
-                return;
-            }
             if (!selectedOrderType) {
                 toast(I18N.chooseOrderType[lang]);
                 return;
