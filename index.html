@@ -1089,11 +1089,11 @@
     <div class="modal" id="takeoutNoticeModal">
         <div class="dialog">
             <div class="x" data-close="takeoutNoticeModal">&times;</div>
-            <div class="welcome-title">外帶提醒</div>
-            <div class="welcome-desc" style="margin-top:.55rem;line-height:1.7">
-                外帶功能僅限現場點單，不開放線上預點，如需線上點餐，請私訊<a href="https://www.instagram.com/partner.burger/?hl=zh-tw" target="_blank" rel="noopener noreferrer">粉絲專業</a>，感謝!
+            <div class="welcome-title" id="takeoutNoticeTitle">外帶提醒</div>
+            <div class="welcome-desc" id="takeoutNoticeDesc" style="margin-top:.55rem;line-height:1.7">
+                <span id="takeoutNoticeBefore">外帶功能僅限現場點單，不開放線上預點，如需線上點餐，請私訊</span><a id="takeoutNoticeLink" href="https://www.instagram.com/partner.burger/?hl=zh-tw" target="_blank" rel="noopener noreferrer">粉絲專業</a><span id="takeoutNoticeAfter">，感謝!</span>
             </div>
-            <button class="btn-full" data-close="takeoutNoticeModal">知道了</button>
+            <button class="btn-full" id="takeoutNoticeOkBtn" data-close="takeoutNoticeModal">知道了</button>
         </div>
     </div>
 
@@ -1161,6 +1161,13 @@
             startOrder: { zh: '開始點餐', en: 'Start Order' },
             orderTypeTitle: { zh: '請選擇用餐方式', en: 'Choose dining type' },
             orderTypeDesc: { zh: '選擇後即可建立新訂單，送出後如需加點請重新掃碼', en: 'Choose one to create a new order. Rescan to add more after submitting.' },
+            welcomeTitle: { zh: '歡迎用餐', en: 'Welcome' },
+            welcomeLater: { zh: '先不要', en: 'Maybe Later' },
+            takeoutNoticeTitle: { zh: '外帶提醒', en: 'Takeout Notice' },
+            takeoutNoticeTextBefore: { zh: '外帶功能僅限現場點單，不開放線上預點，如需線上點餐，請私訊', en: 'Takeout is only available for on-site ordering. Online pre-orders are not available. For online orders, please message us on ' },
+            takeoutNoticeLink: { zh: '粉絲專業', en: 'Instagram' },
+            takeoutNoticeTextAfter: { zh: '，感謝!', en: '. Thank you!' },
+            takeoutNoticeOk: { zh: '知道了', en: 'Got It' },
             dineIn: { zh: '內用', en: 'Dine In' },
             takeOut: { zh: '外帶', en: 'Takeout' },
             chooseOrderType: { zh: '請先選擇內用或外帶', en: 'Please choose dine in or takeout first' },
@@ -2292,11 +2299,18 @@
             $('#txtTemp').textContent = I18N.tempLabel[lang];
             $('#orderDetailBtn').textContent = I18N.orderDetail[lang];
             $('#checkoutNotice').textContent = I18N.checkoutNotice[lang];
+            $('#welcomeTitle').textContent = I18N.welcomeTitle[lang];
+            $('#welcomeLaterBtn').textContent = I18N.welcomeLater[lang];
             $('#orderTypeTitle').textContent = I18N.orderTypeTitle[lang];
             $('#orderTypeDesc').textContent = I18N.orderTypeDesc[lang];
             $('#dineInBtn').textContent = I18N.dineIn[lang];
             $('#takeOutBtn').textContent = I18N.takeOut[lang];
             $('#startNewOrderBtn').textContent = I18N.startOrder[lang];
+            $('#takeoutNoticeTitle').textContent = I18N.takeoutNoticeTitle[lang];
+            $('#takeoutNoticeBefore').textContent = I18N.takeoutNoticeTextBefore[lang];
+            $('#takeoutNoticeLink').textContent = I18N.takeoutNoticeLink[lang];
+            $('#takeoutNoticeAfter').textContent = I18N.takeoutNoticeTextAfter[lang];
+            $('#takeoutNoticeOkBtn').textContent = I18N.takeoutNoticeOk[lang];
             $('#returnHomeTitle').textContent = I18N.returnHomeTitle[lang];
             $('#returnHomeDesc').textContent = I18N.returnHomeDesc[lang];
             $('#returnHomeCancelBtn').textContent = I18N.returnHomeStay[lang];
@@ -3048,7 +3062,6 @@
         function restoreWelcomeModalFull() {
             $('#secNewOrder').style.display = '';
             $('#welcomeLaterBtn').style.display = '';
-            $('#welcomeTitle').textContent = '歡迎用餐';
             selectedOrderType = null;
             document.querySelectorAll('.order-type-btn').forEach(btn => {
                 btn.classList.remove('active');
