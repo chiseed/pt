@@ -1393,6 +1393,7 @@
         let addCartBusy = false;
         let orderDetailBusy = false;
         let selectedOrderType = null;
+        let takeoutNoticeAcknowledged = false;
 
         function nowTs() {
             return Date.now();
@@ -1627,6 +1628,10 @@
             const modal = $('#' + id);
             if (!modal) return;
             modal.classList.remove('show');
+
+            if (id === 'takeoutNoticeModal') {
+                takeoutNoticeAcknowledged = true;
+            }
 
             if (id === 'orderDetailModal') {
                 stopSubmitPreviewCountdown();
@@ -3028,7 +3033,7 @@
         }
 
         function selectOrderType(type) {
-            if (type === 'takeout') {
+            if (type === 'takeout' && !takeoutNoticeAcknowledged) {
                 selectedOrderType = null;
                 document.querySelectorAll('.order-type-btn').forEach(btn => {
                     btn.classList.remove('active');
@@ -3050,7 +3055,7 @@
 
         async function startNewOrderAndGoMenu() {
             if (joinBusy) return;
-            if (selectedOrderType === 'takeout') {
+            if (selectedOrderType === 'takeout' && !takeoutNoticeAcknowledged) {
                 openModal('takeoutNoticeModal');
                 return;
             }
