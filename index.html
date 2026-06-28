@@ -1082,6 +1082,19 @@
         </div>
     </div>
 
+    <div class="modal" id="takeoutNoticeModal">
+        <div class="dialog">
+            <div class="x" data-close="takeoutNoticeModal">&times;</div>
+            <div class="welcome-title">外帶提醒</div>
+            <div class="welcome-desc" style="margin-top:.55rem;line-height:1.7">
+                外帶功能僅限現場點單，不開放線上預點，如需線上點餐，請私訊
+                <a href="https://www.instagram.com/partner.burger/?hl=zh-tw" target="_blank" rel="noopener noreferrer">粉絲專業</a>
+                ，感謝!
+            </div>
+            <button class="btn-full" data-close="takeoutNoticeModal">知道了</button>
+        </div>
+    </div>
+
     <div class="modal" id="orderDetailModal">
         <div class="dialog">
             <div class="x" data-close="orderDetailModal">&times;</div>
@@ -3017,6 +3030,17 @@
         }
 
         function selectOrderType(type) {
+            if (type === 'takeout') {
+                selectedOrderType = null;
+                document.querySelectorAll('.order-type-btn').forEach(btn => {
+                    btn.classList.remove('active');
+                    btn.setAttribute('aria-pressed', 'false');
+                });
+                $('#startNewOrderBtn').disabled = true;
+                openModal('takeoutNoticeModal');
+                return;
+            }
+
             selectedOrderType = type;
             document.querySelectorAll('.order-type-btn').forEach(btn => {
                 const active = btn.dataset.orderType === type;
@@ -3028,6 +3052,10 @@
 
         async function startNewOrderAndGoMenu() {
             if (joinBusy) return;
+            if (selectedOrderType === 'takeout') {
+                openModal('takeoutNoticeModal');
+                return;
+            }
             if (!selectedOrderType) {
                 toast(I18N.chooseOrderType[lang]);
                 return;
